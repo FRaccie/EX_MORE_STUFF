@@ -411,7 +411,7 @@ namespace ExMoreStuff
             {
                 if (heading != null) { heading.Dispose(); note.Dispose(); }
                 topWidth = width;
-                heading = new Heading("Browse Mods", width);
+                heading = new Heading("Browse Mods", width) { Height = 30, Margin = new Padding(6, 0, 6, 2) };   // compact: no empty space above it (user 2026-10-14)
                 // the user's own words, exactly (2026-10-13: "Exactly this nothing more")
                 note = ShadowLabel.Note("Players who use the same stages and costumes will see each other's mods in rollback games.", width);   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                 tools.Width = width - 16;
@@ -447,19 +447,24 @@ namespace ExMoreStuff
             collectionsButton.Primary = pick == "packs" || CollectionPicked;
             foreach (FlatButton b in new[] { stagesButton, characterButton, creatorsButton, collectionsButton, notificationsButton, updatesButton, updateAll }) { b.Width = TextRenderer.MeasureText(b.Text, b.Font).Width + 30; b.Invalidate(); }
             refreshButton.Width = TextRenderer.MeasureText("Refreshing...", refreshButton.Font).Width + 30;   // its widest: nothing moves while it works
-            refreshButton.Location = new Point(search.Right + 12, 2);
-            stagesButton.Location = new Point(refreshButton.Right + 6, 2);
-            characterButton.Location = new Point(stagesButton.Right + 6, 2);
-            creatorsButton.Location = new Point(characterButton.Right + 6, 2);
-            collectionsButton.Location = new Point(creatorsButton.Right + 6, 2);
-            notificationsButton.Location = new Point((collectionsButton.Visible ? collectionsButton : creatorsButton).Right + 6, 2);
-            updatesButton.Location = new Point(notificationsButton.Right + 6, 2);
-            byDate.Location = new Point((updatesButton.Visible ? updatesButton : notificationsButton).Right + 18, 2);
-            byCount.Location = new Point(byDate.Right + 6, 2);
-            // too wide for one line (Updates showing, a narrow window): the sort buttons go on a second line
-            bool wrap = byCount.Right > tools.Width;
-            if (wrap) { byDate.Location = new Point(0, 44); byCount.Location = new Point(byDate.Right + 6, 44); }
-            tools.Height = wrap ? 84 : 40;
+            // the buttons in order after the search box, a new row whenever the next one doesn't fit (user 2026-10-14: "the
+            // buttons are cut off", "make a second row"); the two sort buttons a little apart from the rest, and together
+            int x = search.Right + 12, y = 2;
+            Action<Control, int> place = (b, gap) =>
+            {
+                if (x + gap + b.Width > tools.Width && x > 0) { x = 0; y += 42; gap = 0; }
+                b.Location = new Point(x + gap, y);
+                x = b.Right;
+            };
+            bool first = true;
+            foreach (FlatButton b in new[] { refreshButton, stagesButton, characterButton, creatorsButton, collectionsButton, notificationsButton, updatesButton }.Where(b => b.Visible))
+            {
+                place(b, first ? 0 : 6);
+                first = false;
+            }
+            if (x + 18 + byDate.Width + 6 + byCount.Width > tools.Width) { x = 0; y += 42; place(byDate, 0); } else place(byDate, 18);
+            place(byCount, 6);
+            tools.Height = y + 38;
         }
 
         void Fill()
