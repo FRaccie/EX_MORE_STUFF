@@ -43,7 +43,8 @@ namespace ExMoreStuff
         public sealed class Mod
         {
             public long Id, Added;
-            public long AuthorId;          // the creator's GameBanana member number (0 in lists kept before it was read)
+            public long Modified;          // when it last changed (as read; not kept)
+            public long AuthorId;         // the creator's GameBanana member number (0 in lists kept before it was read)
             public string AuthorPicture;   // the creator's profile picture (an address), or null
             public string Name, Author, Thumbnail, Picture, Category;
             public int Likes;
@@ -349,6 +350,7 @@ namespace ExMoreStuff
                         Id = Number(r, "_idRow"), Name = Text(r, "_sName"), Author = Text(Get(r, "_aSubmitter"), "_sName"), AuthorId = Number(Get(r, "_aSubmitter"), "_idRow"),
                         AuthorPicture = Text(Get(r, "_aSubmitter"), "_sAvatarUrl"), Category = Text(Get(r, "_aRootCategory"), "_sName"),
                         Thumbnail = small, Picture = large, Likes = (int)Number(r, "_nLikeCount"), Added = Number(r, "_tsDateAdded"),
+                        Modified = Number(r, "_tsDateModified"),
                     });
                 }
                 object meta = Get(j, "_aMetadata");
@@ -361,7 +363,7 @@ namespace ExMoreStuff
             foreach (var chunk in Chunks(mods, 25))
             {
                 object answer = Json(await http.GetStringAsync(Data + string.Join("&", chunk.Select(m => "itemtype[]=Mod&itemid[]=" + m.Id + "&fields[]=Files().aFiles()&" +
-                                                                                                         "itemtype[]=Mod&itemid[]=" + m.Id + "&fields[]=downloads"))));
+                                                                                                         "itemtype[]=Mod&itemid[]=" + m.Id + "&fields[]=downloads")) + "&" + Fresh));
                 var rows = Items(answer).ToList();
                 for (int i = 0; i < chunk.Count && 2 * i < rows.Count; i++)
                 {
@@ -372,25 +374,27 @@ namespace ExMoreStuff
                     }
                     var files = Items(rows[2 * i]).FirstOrDefault() as Dictionary<string, object>;
                     if (files == null) continue;
-                    foreach (object f in files.Values)
-                    {
-                        var file = new ModFile
-                        {
-                            Id = Number(f, "_idRow"), Name = Text(f, "_sFile"), Size = Number(f, "_nFilesize"), Added = Number(f, "_tsDateAdded"), Downloads = Number(f, "_nDownloadCount"),
-                            Download = Text(f, "_sDownloadUrl"), Md5 = Text(f, "_sMd5Checksum").ToLowerInvariant(),
-                            Clean = Text(f, "_sAnalysisResult") == "ok" && Text(f, "_sAvResult") == "clean",
-                            // its analysis or virus scan not done yet (user 2026-10-13: a file read 16 s after its upload)
-                            Checking = Pending(Text(f, "_sAnalysisState")) || Pending(Text(f, "_sAvState")),
-                        };
-                        if (file.Download.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) chunk[i].Files.Add(file);
-                    }
-                    chunk[i].Files = chunk[i].Files.OrderBy(f => f.Added).ThenBy(f => f.Id).ToList();
+                    chunk[i].Files = FilesFrom(files.Values);
                 }
             }
+            // that API answers from a copy for a few minutes (user 2026-10-15: "our refresh seems to be stale often"; C.Viper X
+            // Nina's replaced file still listed 3 minutes after its new upload, the current API already naming the new one):
+            // the mods changed in the last day have their files read from the current API too, 6 at a time
+            long since = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 24 * 3600;
+            foreach (var chunk in Chunks(mods.Where(m => m.Modified >= since).ToList(), 6))
+                await Task.WhenAll(chunk.Select(async m =>
+                {
+                    try
+                    {
+                        object files = Get(Json(await http.GetStringAsync(Api + "Mod/" + m.Id + "?_csvProperties=_aFiles&" + Fresh)), "_aFiles");
+                        if (files is IList) m.Files = FilesFrom(Items(files));
+                    }
+                    catch (Exception) { }   // kept as the other API said
+                }));
             // the names inside each file
             foreach (var chunk in Chunks(mods.SelectMany(m => m.Files).ToList(), 40))
             {
-                object answer = Json(await http.GetStringAsync(Data + string.Join("&", chunk.Select(f => "itemtype[]=File&itemid[]=" + f.Id + "&fields[]=Metadata().aArchiveFilesList()"))));
+                object answer = Json(await http.GetStringAsync(Data + string.Join("&", chunk.Select(f => "itemtype[]=File&itemid[]=" + f.Id + "&fields[]=Metadata().aArchiveFilesList()")) + "&" + Fresh));
                 var rows = Items(answer).ToList();
                 for (int i = 0; i < chunk.Count && i < rows.Count; i++)
                     chunk[i].Contents = Flatten(Items(rows[i]).FirstOrDefault()).ToList();
@@ -400,6 +404,25 @@ namespace ExMoreStuff
 
         // a check's state that isn't finished ("" when GameBanana doesn't say: not taken as still checking)
         static bool Pending(string state) { return !string.IsNullOrEmpty(state) && !string.Equals(state, "done", StringComparison.OrdinalIgnoreCase); }
+
+        // a mod's files as either API lists them (the same fields), oldest first
+        static List<ModFile> FilesFrom(IEnumerable<object> listed)
+        {
+            var files = new List<ModFile>();
+            foreach (object f in listed)
+            {
+                var file = new ModFile
+                {
+                    Id = Number(f, "_idRow"), Name = Text(f, "_sFile"), Size = Number(f, "_nFilesize"), Added = Number(f, "_tsDateAdded"), Downloads = Number(f, "_nDownloadCount"),
+                    Download = Text(f, "_sDownloadUrl"), Md5 = Text(f, "_sMd5Checksum").ToLowerInvariant(),
+                    Clean = Text(f, "_sAnalysisResult") == "ok" && Text(f, "_sAvResult") == "clean",
+                    // its analysis or virus scan not done yet (user 2026-10-13: a file read 16 s after its upload)
+                    Checking = Pending(Text(f, "_sAnalysisState")) || Pending(Text(f, "_sAvState")),
+                };
+                if (file.Download.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) files.Add(file);
+            }
+            return files.OrderBy(f => f.Added).ThenBy(f => f.Id).ToList();
+        }
 
         static IEnumerable<List<T>> Chunks<T>(List<T> items, int size)
         {
@@ -417,12 +440,22 @@ namespace ExMoreStuff
 
         public static Task<byte[]> Bytes(string url) { return http.GetByteArrayAsync(url); }
 
+        /// <summary>A file the list named is gone from GameBanana: its link leads to the mod's download page.</summary>
+        public sealed class FileReplaced : Exception
+        {
+            public FileReplaced() : base("its file was replaced on GameBanana") { }
+        }
+
         /// <summary>Downloads a mod's file to `path`, checked against its size and MD5.</summary>
         public static async Task Download(ModFile file, string path, IProgress<long> progress)
         {
             using (var response = await http.GetAsync(file.Download, HttpCompletionOption.ResponseHeadersRead))
             {
                 response.EnsureSuccessStatusCode();
+                // a file replaced since the list was read (user 2026-10-15: C.Viper X Nina's new upload, read 15 s after it
+                // went up with the old file still listed): GameBanana sends its download page instead
+                string type = response.Content.Headers.ContentType?.MediaType ?? "";
+                if (type.Equals("text/html", StringComparison.OrdinalIgnoreCase)) throw new FileReplaced();
                 using (Stream from = await response.Content.ReadAsStreamAsync())
                 using (Stream to = File.Create(path))
                 {

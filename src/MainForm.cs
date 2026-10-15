@@ -100,6 +100,10 @@ namespace ExMoreStuff
             BackColor = Theme.Base;
             AutoScaleMode = AutoScaleMode.Dpi;
             Size = new Size(1000, 800);
+            // a screen shorter than that for programs (150% scaling on a 1080p screen: 1280 x 720): as tall as fits,
+            // the pages scroll
+            int room = Screen.FromPoint(Cursor.Position).WorkingArea.Height;
+            if (Height > room) Height = Math.Max(520, room);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;

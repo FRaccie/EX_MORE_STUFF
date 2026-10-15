@@ -699,6 +699,14 @@ namespace ExMoreStuff
             string[] layers;
             if (start != null)   // a docked file's music there (DockedMusic): built on it, its layers' songs as noted
             {
+                // music made on another stage's bank than the stand-in's: that stage's is the one naming each layer's
+                // sound; none of the game's: built on the stand-in's afresh
+                if (!MusicBank.HasSounds(start, gameBank))
+                {
+                    string on = MusicBank.BuiltOn(game, start);
+                    if (on != null) gameBank = File.ReadAllBytes(on);
+                    else { start = gameBank; startSong = null; }
+                }
                 bank = start;
                 layers = startSong != null ? (string[])startSong.Layers.Clone() : new string[3];
             }

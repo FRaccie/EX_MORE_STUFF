@@ -625,6 +625,7 @@ namespace ExMoreStuff
             if (!isOverride && !await MakeRoom(mod)) return false;
             SetWorking(true);
             string g = game, patch = Game.PatchFolder(game), done = null;
+            bool replaced = false;
             var before = Weight.Keys(g);
             try
             {
@@ -713,9 +714,11 @@ namespace ExMoreStuff
                            Notes(g, before);
                 }
             }
+            catch (GameBanana.FileReplaced ex) { Say(mod.Name + " wasn't installed: " + ex.Message + ". Refreshing...", true); replaced = true; }
             catch (Exception ex) { Say(mod.Name + " wasn't installed: " + ex.Message, true); }
             finally { SetWorking(false); }
             Finished(done);
+            if (replaced) ReadAgain();   // its card then shows the new file (Install), or that GameBanana is still checking it
             return done != null;
         }
 

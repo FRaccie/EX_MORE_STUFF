@@ -148,6 +148,13 @@ namespace ExMoreStuff
                 Files = new List<GameBanana.ModFile> { new GameBanana.ModFile { Clean = true, Contents = new List<string> { "BLK_23.obj.emo" } } } };
             SharedCodes.Holders(new[] { listedAgain, newer });
             Check(SharedCodes.HeldBy["BLK 23"].Id == 999 && !SharedCodes.HeldBy["BLK 23"].Name.Contains("deleted"), "a mod still listed holds its code as itself");
+            var notFree = new GameBanana.Mod { Id = 1001, Added = 300, Name = "Antarctica", Category = "Stages",
+                Files = new List<GameBanana.ModFile> { new GameBanana.ModFile { Clean = true, Contents = new List<string> { "STG_A07.emz", "STG_A07.tex.emz" } } } };
+            var personalOne = new GameBanana.Mod { Id = 1002, Added = 300, Name = "Mine", Category = "Stages",
+                Files = new List<GameBanana.ModFile> { new GameBanana.ModFile { Clean = true, Contents = new List<string> { "STG_U33.emz", "STG_U33.tex.emz" } } } };
+            SharedCodes.Holders(new[] { listedAgain, newer, notFree, personalOne });
+            Check(SharedCodes.StageCode(notFree, "A07") == "A07" && SharedCodes.StageCode(personalOne, "U33") == null,
+                  "a GameBanana stage keeps a not-free code it holds (A07; user 2026-10-15), a personal one (U33) doesn't");
 
             Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");
             Environment.Exit(failures == 0 ? 0 : 1);

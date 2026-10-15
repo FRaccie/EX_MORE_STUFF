@@ -384,6 +384,14 @@ namespace ExMoreStuff
                 Installed again = records.FirstOrDefault(r => r.Item.Id == itemId);
                 // its shared code (a GameBanana stage's), else a personal one
                 string shared = sharedStage != null ? sharedStage(stage.Code) : null;
+                // in under a personal code from before its own could be shared (A## and T## codes, before 2026-10-15):
+                // it moves to its own (taken out under the old one, its old zip to the Recycle Bin)
+                if (again != null && shared != null && again.Item.Code != shared && dock == null)
+                {
+                    Installer.Purge(game, again.Item.Key);
+                    if (!again.Theirs && !string.IsNullOrEmpty(again.Package) && File.Exists(again.Package)) PackagesPanel.RecycleZip(again.Package);
+                    again = null;
+                }
                 string code = again != null ? again.Item.Code : shared ?? FreeStageCode(game);
                 Installed other = shared == null ? null : records.FirstOrDefault(r => r.Item.IsStage && r.Item.Code == code && r.Item.Id != itemId);
                 if (other != null) { result.Problems.Add(stage.Describe + ": your " + other.Item.TitleNamed(other.Shown ?? other.Item.Name) + " is in stage " + code + ", the code this stage shares with everyone; give yours another code in Advanced > Package codes first"); continue; }

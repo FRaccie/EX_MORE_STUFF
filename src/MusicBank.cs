@@ -105,6 +105,39 @@ namespace ExMoreStuff
 
         public static int CueCount(byte[] bank) { return Sub(UtfTable.Read(bank), "CUE").Rows.Count; }
 
+        /// <summary>Whether `bank` has every sound `game` (the game's own bank) plays on its layers: built on it, so
+        /// Build and Link can find each layer's own sound in it.</summary>
+        public static bool HasSounds(byte[] bank, byte[] game)
+        {
+            var gameCsb = UtfTable.Read(game);
+            UtfTable gameCues = Sub(gameCsb, "CUE"), gameSynths = Sub(gameCsb, "SYNTH"), gameElements = Sub(gameCsb, "SOUND_ELEMENT");
+            var elements = Sub(UtfTable.Read(bank), "SOUND_ELEMENT");
+            for (int c = 0; c < gameCues.Rows.Count; c++)
+                if (Row(elements, "name", (string)gameElements.Get(ElementOf(gameCues, gameSynths, gameElements, c), "name")) < 0) return false;
+            return true;
+        }
+
+        /// <summary>The game's stage bank `bank` was built on (its file), or null: music made on another stage than
+        /// the stand-in its code builds on now (user 2026-10-15: Urban War Zone's on HFP's, its code's stand-in CHN;
+        /// "the bank lacks the game's sound Synth/STAGE/CHN/s_bgm_03_wav"). Its sounds' names say which first
+        /// (Synth/HFP/..., Synth/STAGE/CHN/...); otherwise each stage's bank is tried.</summary>
+        public static string BuiltOn(string game, byte[] bank)
+        {
+            var elements = Sub(UtfTable.Read(bank), "SOUND_ELEMENT");
+            var named = new List<string>();
+            for (int i = 0; i < elements.Rows.Count; i++)
+                foreach (string part in ((string)elements.Get(i, "name") ?? "").Split('/'))
+                    if (Array.IndexOf(Stages.Codes, part) >= 0 && !named.Contains(part)) named.Add(part);
+            foreach (string code in named.Concat(Stages.Codes.Where(c => !named.Contains(c))))
+            {
+                string file = GameFile(game, "BGM_" + code + ".csb");
+                if (file == null) continue;
+                try { if (HasSounds(bank, File.ReadAllBytes(file))) return file; }
+                catch (Exception ex) when (ex is InvalidDataException || ex is IOException) { }
+            }
+            return null;
+        }
+
         /// <summary>How loud the game plays a cue's sound, from the bank's synths: the track's volume (of 1000) times
         /// its loudest waveform's volume (of 1000) and front send (dry0/dry1, of 255; a waveform with no sends set at
         /// all, as Ultra's new fighters' themes have, plays at full). A stage's main theme: 1000 × 400 × 229 ≈ 0.36

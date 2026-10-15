@@ -54,13 +54,15 @@ namespace ExMoreStuff
         };
 
         /// <summary>The shared stage code a mod's stage (made from `code`) goes in: its given B## (a mod replacing one of the
-        /// game's stages), or its own code when it holds it; null: a personal one.</summary>
+        /// game's stages), or its own code when it holds it, a not-free one too (user 2026-10-15: their Downtime in
+        /// Antarctica, STG_A02 on GameBanana, went in as U01: "not free" is a warning for picking a code, not for a mod
+        /// already holding it); null: a personal one.</summary>
         public static string StageCode(GameBanana.Mod mod, string code)
         {
             string given;
             if (!Stages.IsCustomCode(code)) return GivenStages.TryGetValue(mod.Id, out given) ? given : null;
             GameBanana.Mod holder;
-            return HeldBy.TryGetValue("stage " + code, out holder) && holder.Id == mod.Id && !Catalog.NotFree(true, code, 0) && !Catalog.PersonalSeat(true, code, 0) ? code : null;
+            return HeldBy.TryGetValue("stage " + code, out holder) && holder.Id == mod.Id && !Catalog.PersonalSeat(true, code, 0) ? code : null;
         }
 
         public static string Code(string fighter, int slot) { return fighter + " " + slot.ToString("D2"); }
