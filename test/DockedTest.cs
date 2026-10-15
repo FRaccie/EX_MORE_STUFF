@@ -88,7 +88,8 @@ namespace ExMoreStuff
             var urban = ModFile.Dock(game, mod, text => { });
             list = Docked.Load();
             Check(urban.Into.SequenceEqual(new[] { "stage U01" }) && urban.Problems.Count == 0 && list.Count == 1 && list[0].Item.Code == "U01", "docked as stage U01");
-            Check(Path.GetDirectoryName(list[0].Package) == AppFolders.StagePackages && Names(list[0].Package).All(n => n.StartsWith("STG_U01")), "its package built in Mods\\Stages");
+            Check(list[0].Package == mod && Names(mod).All(n => n.StartsWith("STG_U01")) && Installer.Package(mod) != null, "the zip added is the package now (STG_U01, user 2026-10-14)");
+            Check(!Directory.Exists(AppFolders.StagePackages) || Directory.GetFiles(AppFolders.StagePackages, "Urban War Zone*.zip").Length == 0, "no copy left in Mods\\Stages");
             Check(Installer.Load(game).Count == 0 && !Directory.Exists(Path.Combine(game, "patch_ae2_tu3", "battle", "stage")), "nothing in the game");
             var night = ModFile.Dock(game, other, text => { });
             Check(night.Into.SequenceEqual(new[] { "stage U02" }), "the next one gets U02: a docked package's code is taken");
@@ -106,14 +107,13 @@ namespace ExMoreStuff
             Check(Names(u01.Package).Count(n => n == "STG_U01.png") == 1 && Installer.Package(u01.Package) != null, "one picture, still a whole package");
             Check(PerfTest.StagePictureShot(u01.Package) == shot, "noted as the one chosen");
 
-            Console.WriteLine("Docked again: the zip built before is docked as it is (user 2026-10-14: Antarctica lost its picture)");
-            Docked.Remove(u01.Package);
-            var again = ModFile.Dock(game, mod, text => { });
-            Check(again.Into.SequenceEqual(new[] { "stage U01, as you left it" }) && Docked.Has(u01.Package), "the same zip, docked again as stage U01");
-            Check(Installer.PackagePicture(u01.Package, u01.Item).SequenceEqual(picture), "its chosen picture still in it");
-            Check(Directory.GetFiles(AppFolders.StagePackages, "Urban War Zone*.zip").Length == 1, "no second copy built");
-            var twice = ModFile.Dock(game, mod, text => { });
-            Check(twice.Into.Count == 0 && twice.Problems.Count == 1 && twice.Problems[0].EndsWith("is docked already"), "docked while it's docked: said so");
+            Check(u01.Package == mod && Installer.PackagePicture(mod, u01.Item).SequenceEqual(picture), "the picture is in the zip the player added");
+
+            Console.WriteLine("Docked again: the zip is a package now, docked as it is with its picture (Add Mod From File's dock)");
+            Docked.Remove(mod);
+            Check(Installer.Package(mod) != null, "a package: docked as it is, nothing built");
+            Docked.Add(mod);
+            Check(Docked.Load().Any(r => r.Package == mod && r.Item.Code == "U01") && Installer.PackagePicture(mod, u01.Item).SequenceEqual(picture), "docked again as stage U01, its picture still in it");
             foreach (var r in Docked.Load()) Docked.Remove(r.Package);
 
             Console.WriteLine(failures == 0 ? "All passed" : failures + " failed");

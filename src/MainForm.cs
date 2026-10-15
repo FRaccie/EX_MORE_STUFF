@@ -449,7 +449,11 @@ namespace ExMoreStuff
             advancedTab.Selected = tab == advancedTab;
             aboutTab.Selected = tab == aboutTab;
             advancedPage.Visible = tab == advancedTab && openTool == null;
+            // the Music page's list made again each time it opens: stages docked or added since show (user 2026-10-14: the stage
+            // docked, then added, wasn't on it; it was made only at start); the song open and the row picked stay
+            bool musicOpening = !musicView.Visible && tab == advancedTab && openTool == "music";
             musicView.Visible = tab == advancedTab && openTool == "music";
+            if (musicOpening) musicPage.SetGame(game);
             packagesView.Visible = tab == advancedTab && openTool == "packages";
             storageView.Visible = tab == advancedTab && openTool == "storage";
             freeCodesView.Visible = tab == advancedTab && openTool == "freecodes";

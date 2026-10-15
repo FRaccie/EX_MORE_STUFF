@@ -67,7 +67,7 @@ namespace ExMoreStuff
             foreach (Installed r in Installer.Load(game))
                 uses.Add(new Use
                 {
-                    Title = title(r), Kind = Kind(r.Item) + (r.Source == "file" ? ", your own package" : ", from the catalog"),
+                    Title = title(r), Kind = Kind(r.Item) + From(r),
                     InGame = r.Files.Sum(f => FileSize(Path.Combine(patch, f))),
                     Zip = r.Source == "file" && !string.IsNullOrEmpty(r.Package) ? FileSize(r.Package) : 0,
                 });
@@ -151,6 +151,17 @@ namespace ExMoreStuff
         }
 
         static string Kind(Item item) { return item.IsStage ? "Stage" : item.IsColor ? "Color" : "Costume"; }
+
+        // where an installed one came from (user 2026-10-14: "it says your own package" for GameBanana's too): Browse Mods
+        // ("from GameBanana by <creator>"), Add Mod From File, an imported legacy mod, or the catalog
+        static string From(Installed r)
+        {
+            string id = r.Item.Id ?? "";
+            if (r.Source != "file") return ", from the catalog";
+            if (id.StartsWith("gamebanana:")) return string.IsNullOrEmpty(r.Item.Author) ? ", from GameBanana" : ", from GameBanana by " + r.Item.Author;
+            if (id.StartsWith("import:")) return ", imported legacy mod";
+            return ", added from a file";
+        }
 
         static ShadowLabel Line(string text, int width, Font font, Color color)
         {

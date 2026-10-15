@@ -221,16 +221,32 @@ namespace ExMoreStuff
             result.Into.Add(what + ", as you left it");
         }
 
-        /// <summary>A mod file that isn't a package, docked for edits: its packages built as Install builds them (in Mods\,
-        /// each in a slot or code of the player's own) and docked (Docked), not put in the game; the game may be open.
-        /// Into: what was docked ("stage U03"); Problems: what wasn't.</summary>
+        /// <summary>A mod file that isn't a package, docked for edits: its package built as Install builds it (in a slot or
+        /// code of the player's own) and docked (Docked), not put in the game; the game may be open. A .zip that makes one
+        /// package becomes that package itself (user 2026-10-14: "when i press the image button it should put the image in
+        /// there", the zip they added, as their costume packages are): its files converted in place, so the picture and code
+        /// changes go into it and it's the file to upload. A mod that makes several, or a .rar or .7z (not written), gets
+        /// copies in Mods\ as Install builds them. Into: what was docked ("stage U03"); Problems: what wasn't.</summary>
         public static Result Dock(string game, string path, Action<string> say)
         {
             string patch = Game.PatchFolder(game);
             Directory.CreateDirectory(patch);
             say("Unpacking " + Path.GetFileName(path) + "...");
             var files = GameBanana.Unpack(path, Path.Combine(patch, "ex_more_stuff.unpack"));
-            return InstallFiles(game, files, "file:" + Md5(path).Substring(0, 16), NameFrom(path), null, " (" + Path.GetFileName(path) + ")", null, say, dock: Docked.Add);
+            var built = new List<string>();
+            var result = InstallFiles(game, files, "file:" + Md5(path).Substring(0, 16), NameFrom(path), null, " (" + Path.GetFileName(path) + ")", null, say, dock: built.Add);
+            if (built.Count == 1 && path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    File.Copy(built[0], path, true);   // the player's zip is the package now
+                    File.Delete(built[0]);
+                    built[0] = path;
+                }
+                catch (Exception ex) { result.Problems.Add("your zip couldn't be made the package (" + ex.Message + "), so a copy in the Mods folder is docked"); }
+            }
+            foreach (string zip in built) Docked.Add(zip);
+            return result;
         }
 
         /// <summary>The same with a mod's files already unpacked (paths as "file/folder/name"); `where` says where it came

@@ -90,7 +90,7 @@ namespace ExMoreStuff
                 await gate.WaitAsync();
                 try
                 {
-                    object profile = Json(await http.GetStringAsync(Api + "Member/" + id + "/ProfilePage"));
+                    object profile = Json(await http.GetStringAsync(Api + "Member/" + id + "/ProfilePage?" + Fresh));
                     var support = new Support();
                     foreach (object way in Items(Get(profile, "_aDonationMethods")).Concat(Items(Get(profile, "_aContactInfo"))))
                     {
@@ -129,7 +129,7 @@ namespace ExMoreStuff
                 {
                     for (int page = 1; page <= 20; page++)
                     {
-                        object j = Json(await http.GetStringAsync(Api + "Collection/Index?_nPage=" + page + "&_nPerpage=50&" + filter));
+                        object j = Json(await http.GetStringAsync(Api + "Collection/Index?_nPage=" + page + "&_nPerpage=50&" + filter + "&" + Fresh));
                         records.AddRange(Items(Get(j, "_aRecords")));
                         object meta = Get(j, "_aMetadata");
                         if (meta == null || Text(meta, "_bIsComplete") == "True") break;
@@ -150,7 +150,7 @@ namespace ExMoreStuff
                 bool ownOnly = c.OwnerId != 0;
                 for (int page = 1; ownOnly && page <= 20; page++)
                 {
-                    object j = Json(await http.GetStringAsync(Api + "Collection/" + c.Id + "/Items?_nPage=" + page + "&_nPerpage=50"));
+                    object j = Json(await http.GetStringAsync(Api + "Collection/" + c.Id + "/Items?_nPage=" + page + "&_nPerpage=50&" + Fresh));
                     foreach (object r in Items(Get(j, "_aRecords")))
                     {
                         if (Number(Get(r, "_aSubmitter"), "_idRow") != c.OwnerId) { ownOnly = false; break; }
@@ -325,12 +325,21 @@ namespace ExMoreStuff
             }).ToList();
         }
 
+        // GameBanana's servers keep its collection lists, a collection's items and members' profiles for up to 10 minutes
+        // (Cache-Control max-age=600; user 2026-10-14: the Mod Pack showed 3 mods after 2 more were added): these requests
+        // carry a marker new for each read of the list, so each Refresh gets them as they are now (a few small requests)
+        static string Fresh = "_r=0";
+
         static async Task<List<Mod>> ReadAll()
         {
+            Fresh = "_r=" + (DateTime.UtcNow.Ticks / TimeSpan.TicksPerSecond);
             var mods = new List<Mod>();
             for (int page = 1; page <= 20; page++)
             {
-                object j = Json(await http.GetStringAsync(Api + "Mod/Index?_nPage=" + page + "&_nPerpage=50&_aFilters%5BGeneric_Game%5D=" + Game + "&_sSort=Generic_Oldest"));
+                // newest first: GameBanana's servers keep the oldest-first list for up to 10 minutes (Cache-Control max-age=600,
+                // Cloudflare HIT), so a mod just uploaded wasn't on it (user 2026-10-14: Refresh didn't bring up Mishima Estate
+                // Rooftop, uploaded a minute before); the newest-first list isn't cached (BYPASS)
+                object j = Json(await http.GetStringAsync(Api + "Mod/Index?_nPage=" + page + "&_nPerpage=50&_aFilters%5BGeneric_Game%5D=" + Game + "&_sSort=Generic_Newest"));
                 foreach (object r in Items(Get(j, "_aRecords")))
                 {
                     string small, large;
@@ -345,6 +354,8 @@ namespace ExMoreStuff
                 object meta = Get(j, "_aMetadata");
                 if (meta == null || Text(meta, "_bIsComplete") == "True" || mods.Count >= Number(meta, "_nRecordCount")) break;
             }
+            // a mod uploaded while the pages were read moves the others down one: none listed twice
+            mods = mods.GroupBy(m => m.Id).Select(g => g.First()).ToList();
             // each mod's files and its download count, many mods to a request (the API pairs each field with one item, so a mod
             // is asked for twice: its files, then its downloads)
             foreach (var chunk in Chunks(mods, 25))
