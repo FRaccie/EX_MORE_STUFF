@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace ExMoreStuff
 {
@@ -52,6 +53,30 @@ namespace ExMoreStuff
                 for (int c = 0; c < Math.Min(cues, 3); c++) same &= Math.Abs(MusicBank.MixGain(bank, c) - MusicBank.MixGain(gameBank, c)) < 0.002;
                 Check(same, "not matched: every layer at the game's own level for it");
             }
+
+            Console.WriteLine("A docked stage's song: into its zip, not the game (DockedMusic, user 2026-10-14)");
+            string scratch = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1])), "docked_music_test");
+            if (Directory.Exists(scratch)) Directory.Delete(scratch, true);
+            Directory.CreateDirectory(scratch);
+            AppFolders.Root = scratch;
+            string zip = Path.Combine(scratch, "Docked Stage - U07.zip");
+            using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
+                using (var s = archive.CreateEntry("STG_U07.emz").Open()) s.WriteByte(1);
+            var u07 = new MusicSlot { Code = "U07" };
+            byte[] template = File.ReadAllBytes(MusicBank.GameFile(game, u07.TemplateFile));
+            InstalledSong put;
+            byte[] main = MusicPanel.BuildFor(game, null, u07, 0, pcm, ls, le, "test", 0, 1, MusicPanel.LevelsFor(0), out put, template, null);
+            DockedMusic.Put(zip, u07.File, main, put);
+            InstalledSong read = DockedMusic.Song(zip, u07.File);
+            Check(DockedMusic.Bank(zip, u07.File).SequenceEqual(main) && read != null && read.Layers[0] == "test", "in the zip as BGM_U07.csb, noted as your song");
+            byte[] ultra = MusicPanel.BuildFor(game, null, u07, 1, pcm, ls, le, "ultra test", 0, 1, MusicPanel.LevelsFor(0), out put, DockedMusic.Bank(zip, u07.File), read);
+            DockedMusic.Put(zip, u07.File, ultra, put);
+            read = DockedMusic.Song(zip, u07.File);
+            Check(read != null && read.Layers[0] == "test" && read.Layers[1] == "ultra test", "the Ultra layer built on the docked file's music, its main song kept");
+            Check(DockedMusic.Bank(zip, u07.InRound(2).File) == null, "round 2 not in it");
+            Check(DockedMusic.TakeOut(zip, u07.File) && DockedMusic.Bank(zip, u07.File) == null && DockedMusic.Song(zip, u07.File) == null, "taken out again");
+            Check(!File.Exists(Path.Combine(scratch, "docked_music.json")), "nothing noted any more");
+            Directory.Delete(scratch, true);
             Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");
             Environment.Exit(failures == 0 ? 0 : 1);
         }

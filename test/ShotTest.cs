@@ -14,6 +14,10 @@ static class ShotTest
 
     static Form form;
     static string folder;
+    static Control creators;   // the Creators list, drawn on its own
+    static bool tabHeart;
+    static Control cardName;   // a costume card's creator name
+    static Form ask;           // the delete question
 
     [STAThread]
     static void Main(string[] args)
@@ -44,15 +48,48 @@ static class ShotTest
             switch (step++)
             {
                 case 1: Save("roster"); Call("ShowCostumes", fighter); break;
-                case 2: Save("costumes"); Call("ShowRoster"); Call("ShowTab", Field("stagesTab")); break;
+                case 2:
+                    Save("costumes");
+                    // a GameBanana costume's gold name, clicked later (step 19): its creator's mods on Browse Mods
+                    cardName = Find(form, c => c.GetType().Name == "GoldName" && c.Parent.GetType().Name == "ItemCard");
+                    Call("ShowRoster");
+                    Call("ShowTab", Field("stagesTab"));
+                    break;
                 case 3:
                     Save("stages");
+                    ShootMenu((Control)Field("stagesPage"), "test_menu");
                     var list = (ScrollableControl)Field("stagesPage");
                     list.AutoScrollPosition = new Point(0, 600);
                     list.Invalidate(true);
                     break;
-                case 4: Save("stages_scrolled"); Call("ShowTab", Field("advancedTab")); break;
-                case 5: Save("advanced"); SetField("openTool", "music"); Call("ShowTab", Field("advancedTab")); break;
+                case 4:
+                    Save("stages_scrolled");
+                    Call("ShowTab", Field("musicTab"));
+                    Save("music_tab");
+                    Call("ShowTab", Field("advancedTab"));
+                    break;
+                case 5:
+                    Save("advanced");
+                    var advanced = (ScrollableControl)Field("advancedPage");
+                    advanced.AutoScrollPosition = new Point(0, 2000);   // its end: Performance warnings
+                    advanced.Invalidate(true);
+                    advanced.Update();
+                    Save("advanced_scrolled");
+                    // the stage line's + pressed (as a click does), shown, then put back
+                    foreach (Control c in advanced.Controls)
+                        if (c.GetType().Name == "LineSetting")
+                        {
+                            var set = c.GetType().GetMethod("Set", BindingFlags.NonPublic | BindingFlags.Instance);
+                            set.Invoke(c, new object[] { 4.5 });
+                            advanced.Update();
+                            Save("advanced_line_changed");
+                            set.Invoke(c, new object[] { 4.0 });
+                            break;
+                        }
+                    advanced.AutoScrollPosition = Point.Empty;
+                    SetField("openTool", "music");
+                    Call("ShowTab", Field("advancedTab"));
+                    break;
                 case 6: Save("music"); SetField("openTool", "packages"); Call("ShowTab", Field("advancedTab")); break;
                 case 7: Save("packages"); SetField("openTool", "storage"); Call("ShowTab", Field("advancedTab")); break;
                 case 8: Save("storage"); SetField("openTool", "freecodes"); Call("ShowTab", Field("advancedTab")); break;
@@ -65,14 +102,52 @@ static class ShotTest
                     break;
                 }
                 case 10: Save("freecodes_check"); SetField("openTool", "oldmods"); Call("ShowTab", Field("advancedTab")); break;
-                case 11: Save("oldmods"); SetField("openTool", null); Call("ShowTab", Field("communityTab")); break;
+                case 11:
+                    Save("oldmods");
+                    SetField("openTool", "creation");
+                    var creation = Field("creationPage");   // as its card does: the game folder first
+                    creation.GetType().GetMethod("SetGame").Invoke(creation, new[] { Field("game") });
+                    Call("ShowTab", Field("advancedTab"));
+                    break;
+                case 12:
+                    Save("creation");
+                    // colors 2 and 5 left out, as clicks on them do
+                    Control row = Find((Control)Field("creationPage"), c => c.GetType().Name == "CreationRow");
+                    if (row != null)
+                        foreach (int i in new[] { 1, 4 })
+                            typeof(Control).GetMethod("OnMouseClick", BindingFlags.Instance | BindingFlags.NonPublic)
+                                .Invoke(row, new object[] { new MouseEventArgs(MouseButtons.Left, 1, 14 + i * 50 + 20, 58 + 30, 0) });
+                    Save("creation_picked");
+                    // Share a mod: the guide, top and bottom
+                    SetField("openTool", "guide");
+                    Call("ShowTab", Field("advancedTab"));
+                    Save("guide");
+                    var guideList = (ScrollableControl)Inner(Field("guidePage"), "list");
+                    guideList.AutoScrollPosition = new Point(0, 3000);
+                    guideList.Invalidate(true);
+                    guideList.Update();
+                    Save("guide_scrolled");
+                    SetField("openTool", null);
+                    Call("ShowTab", Field("communityTab"));
+                    // the delete question, as a package's trash can asks it
+                    ask = (Form)Activator.CreateInstance(form.GetType().Assembly.GetType("ExMoreStuff.DeleteDialog"),
+                        "Stage U01 - STG BLD Frozen No Reactions", "It's taken out of the game and out of EX More Stuff. Songs you put on U01 go with it.\n\nThe original mod file you added is untouched.");
+                    ask.Show(form);   // shot next step, once it has drawn (at once it comes out black)
+                    break;
                 case 15:
+                    Save(ask, "delete_dialog");
+                    ask.Close();
+                    // Add Mod From File's question, once the files are picked
+                    ask = (Form)Activator.CreateInstance(form.GetType().Assembly.GetType("ExMoreStuff.DockDialog"), new object[] { new[] { "Cammy X Lili Tekken Crossover - CMY 79.zip" } });
+                    ask.Show(form);
                     Save("community");
                     var community = (ScrollableControl)Inner(Field("communityPage"), "list");
                     community.AutoScrollPosition = new Point(0, 3020);
                     community.Invalidate(true);
                     break;
                 case 16:
+                    Save(ask, "dock_dialog");
+                    ask.Close();
                     Save("community_scrolled");
                     ((Control)Inner(Field("communityPage"), "search")).Text = "akuma";   // the search waits 0.3 s for more typing
                     break;
@@ -102,23 +177,57 @@ static class ShotTest
                 case 19:
                 {
                     Save("community_highlight");
+                    if (cardName != null)
+                    {
+                        typeof(Control).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(cardName, new object[] { EventArgs.Empty });
+                        Save("community_creator");
+                    }
                     // the Updates list (with Update all), when installed mods have newer versions
                     var page17 = Field("communityPage");
                     page17.GetType().GetField("pick", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(page17, "updates");
                     page17.GetType().GetMethod("Fill", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(page17, null);
                     break;
                 }
-                case 20: Save("community_updates"); Call("ShowTab", Field("aboutTab")); break;
+                case 20:
+                {
+                    Save("community_updates");
+                    // with a favorite creator (settings.json's favoriteCreators) who has new mods, the tab has a heart: clicking
+                    // the tab opens Notifications; the Creators list (its pictures start loading) is drawn next step
+                    Call("ShowTab", Field("stagesTab"));
+                    var tab = (Control)Field("communityTab");
+                    tabHeart = (bool)tab.GetType().GetProperty("Heart").GetValue(tab);
+                    typeof(Control).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(tab, new object[] { EventArgs.Empty });
+                    var page20 = Field("communityPage");
+                    creators = (Control)page20.GetType().GetMethod("CreatorList", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(page20, null);
+                    break;
+                }
                 case 21:
+                {
+                    Save("community_notifications");
+                    var tab = (Control)Field("communityTab");
+                    Console.WriteLine("tab heart before the click: " + tabHeart + ", after: " + tab.GetType().GetProperty("Heart").GetValue(tab));
+                    var shot = new Bitmap(creators.Width, creators.Height);
+                    creators.DrawToBitmap(shot, new Rectangle(0, 0, creators.Width, creators.Height));
+                    shot.Save(Path.Combine(folder, "creator_picker.png"), ImageFormat.Png);
+                    Call("ShowTab", Field("aboutTab"));
+                    break;
+                }
+                case 22:
+                {
+                    // the Creators list again, its pictures in by now
+                    var later = new Bitmap(creators.Width, creators.Height);
+                    creators.DrawToBitmap(later, new Rectangle(0, 0, creators.Width, creators.Height));
+                    later.Save(Path.Combine(folder, "creator_picker.png"), ImageFormat.Png);
+                }
                     Save("about");
                     Call("ShowTab", Field("stagesTab"));
                     // The replace dialog is modal: opened from a posted call, the timer keeps ticking inside it.
                     form.BeginInvoke(new Action(() => Call("ChooseReplacement", "DET")));
                     break;
-                case 23: Save(Dialog(), "replace_open"); Pick("TRN"); break;
-                case 25: Save(Dialog(), "replace_trn"); Pick("VIE"); break;
-                case 27: Save(Dialog(), "replace_vie"); Dialog().DialogResult = DialogResult.Cancel; break;
-                case 28: timer.Stop(); form.Close(); break;
+                case 24: Save(Dialog(), "replace_open"); Pick("TRN"); break;
+                case 26: Save(Dialog(), "replace_trn"); Pick("VIE"); break;
+                case 28: Save(Dialog(), "replace_vie"); Dialog().DialogResult = DialogResult.Cancel; break;
+                case 29: timer.Stop(); form.Close(); break;
             }
         };
         form.Shown += (s, e) => timer.Start();
@@ -155,6 +264,41 @@ static class ShotTest
     {
         Form dialog = Dialog();
         dialog.GetType().GetMethod("Pick", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(dialog, new object[] { code });
+    }
+
+    [DllImport("user32.dll")] static extern bool EnumThreadWindows(uint thread, EnumWindowsProc callback, IntPtr param);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    delegate bool EnumWindowsProc(IntPtr window, IntPtr param);
+
+    // The first card mark's menu (the performance test), as a click opens it: drawn on its own, then closed.
+    static void ShootMenu(Control page, string name)
+    {
+        Control mark = Find(page, c => c.GetType().Name == "WarningMark" && c.Visible);
+        if (mark == null) return;
+        typeof(Control).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(mark, new object[] { EventArgs.Empty });
+        EnumThreadWindows(GetCurrentThreadId(), (window, param) =>
+        {
+            var menu = Control.FromHandle(window) as ToolStripDropDown;
+            if (menu == null || !menu.Visible) return true;
+            using (var bitmap = new Bitmap(menu.Width, menu.Height))
+            {
+                menu.DrawToBitmap(bitmap, new Rectangle(0, 0, menu.Width, menu.Height));
+                bitmap.Save(Path.Combine(folder, name + ".png"), ImageFormat.Png);
+            }
+            menu.Close();
+            return false;
+        }, IntPtr.Zero);
+    }
+
+    static Control Find(Control root, Func<Control, bool> match)
+    {
+        foreach (Control c in root.Controls)
+        {
+            if (match(c)) return c;
+            Control inner = Find(c, match);
+            if (inner != null) return inner;
+        }
+        return null;
     }
 
     static void Save(string name) { Save(form, name); }

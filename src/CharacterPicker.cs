@@ -115,7 +115,7 @@ namespace ExMoreStuff
             return drop;
         }
 
-        static void BeginDispose(ToolStripDropDown drop)
+        internal static void BeginDispose(ToolStripDropDown drop)
         {
             var timer = new Timer { Interval = 1 };
             timer.Tick += (s, e) => { timer.Dispose(); drop.Dispose(); };
@@ -123,7 +123,7 @@ namespace ExMoreStuff
         }
 
         // the drop-down itself: dark, no light border
-        sealed class Dark : ToolStripRenderer
+        internal sealed class Dark : ToolStripRenderer
         {
             protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
             {

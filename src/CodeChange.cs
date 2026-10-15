@@ -21,6 +21,26 @@ namespace ExMoreStuff
             if (record.Source != "file" || string.IsNullOrEmpty(record.Package)) return "only your own packages (added from a zip) can change their code";
             if (!File.Exists(record.Package)) return "its zip isn't at " + record.Package + " any more";
             Item moved = Moved(item, code, slot);
+            string wrong = Wrong(item, code, slot);
+            if (wrong != null) return wrong;
+            var taken = Installer.Load(game).Concat(Installer.Removed(game)).FirstOrDefault(r => r.Item.Key == moved.Key);
+            if (taken != null) return (item.IsStage ? code : (item.IsColor ? "color " : "slot ") + slot) + " is already used by " + taken.Item.TitleNamed(taken.Shown ?? taken.Item.Name);
+            string folder = Game.FolderFor(game, moved);
+            if (File.Exists(Path.Combine(folder, moved.Prefix + (item.IsStage ? ".emz" : item.IsColor ? ".col.emb" : ".obj.emo"))))
+                return "the game folder already has " + moved.Prefix + " files that EX More Stuff didn't put there";
+            if (item.IsStage)
+                foreach (string round in new[] { "", "2", "3" })
+                {
+                    string file = "BGM_" + code + round + ".csb";
+                    if (File.Exists(MusicBank.PatchFile(game, file))) return "the game folder already has " + file;
+                }
+            if (Game.IsRunning()) return "close the game first";
+            return null;
+        }
+
+        // a code, slot or color number that can't be: not one, or its own already
+        static string Wrong(Item item, string code, int slot)
+        {
             if (item.IsStage)
             {
                 if (!Regex.IsMatch(code ?? "", "^[A-Z0-9]{3}$")) return "a stage code is three capital letters or digits";
@@ -37,19 +57,22 @@ namespace ExMoreStuff
                 if (slot < Catalog.FirstCustomCostume || slot > Catalog.LastSlot) return "a costume slot is " + Catalog.FirstCustomCostume + " to " + Catalog.LastSlot;
                 if (slot == item.Slot) return "that's its slot already";
             }
-            var taken = Installer.Load(game).Concat(Installer.Removed(game)).FirstOrDefault(r => r.Item.Key == moved.Key);
-            if (taken != null) return (item.IsStage ? code : (item.IsColor ? "color " : "slot ") + slot) + " is already used by " + taken.Item.TitleNamed(taken.Shown ?? taken.Item.Name);
-            string folder = Game.FolderFor(game, moved);
-            if (File.Exists(Path.Combine(folder, moved.Prefix + (item.IsStage ? ".emz" : item.IsColor ? ".col.emb" : ".obj.emo"))))
-                return "the game folder already has " + moved.Prefix + " files that EX More Stuff didn't put there";
-            if (item.IsStage)
-                foreach (string round in new[] { "", "2", "3" })
-                {
-                    string file = "BGM_" + code + round + ".csb";
-                    if (File.Exists(MusicBank.PatchFile(game, file))) return "the game folder already has " + file;
-                }
-            if (Game.IsRunning()) return "close the game first";
             return null;
+        }
+
+        /// <summary>Why a docked file (Docked: not in the game, so only its zip changes) can't move to `code` or `slot`, or null.</summary>
+        public static string DockedProblem(Installed record, string code, int slot)
+        {
+            if (!File.Exists(record.Package)) return "its file isn't at " + record.Package + " any more";
+            return Wrong(record.Item, code, slot);
+        }
+
+        /// <summary>Moves a docked file (check DockedProblem first): its zip rewritten under the new code, nothing else.</summary>
+        public static void MoveDocked(Installed record, string code, int slot)
+        {
+            string was = record.Package + ".was";
+            Rewrite(record.Package, record.Item, Moved(record.Item, code, slot), was);
+            File.Delete(was);
         }
 
         /// <summary>Moves the package (check Problem first). Returns notes on songs that couldn't move, or null.</summary>

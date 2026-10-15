@@ -39,6 +39,7 @@ namespace ExMoreStuff
                 File.Copy(f, Path.Combine(chara, "RYU_40" + Path.GetFileName(f).Substring(6)));
             }
             File.WriteAllText(Path.Combine(chara, "RYU.bac"), "a changed move list");
+            File.WriteAllText(Path.Combine(chara, "RYU_E.csb"), "a changed English voice");   // a voice mod (as Cody's chain noises taken out)
             Directory.CreateDirectory(Path.Combine(patch, "battle", "stage_oopsV1"));
             File.WriteAllText(Path.Combine(patch, "battle", "stage_oopsV1", "notes.txt"), "stray");
             // an official update file (path and size as listed): the game's own
@@ -79,6 +80,14 @@ namespace ExMoreStuff
             Check(discarded.Count == alt1.Files.Count && File.Exists(Path.Combine(chara, "RYU_84.obj.emo")), "its loose files discarded, RYU_84 in the game");
             Check(CostumeSwaps.Load(game).Any(s => s.Key == "RYU:2" && s.Source == 84) && Same(Path.Combine(chara, "RYU_02.obj.emo"), Path.Combine(chara, "RYU_84.obj.emo")),
                   "Alternate 1 still plays as it (a costume replacement)");
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(ryu84.Package))
+            {
+                var voice = zip.Entries.FirstOrDefault(e => e.Name == "RYU_84_E.csb");
+                Check(voice != null && new StreamReader(voice.Open()).ReadToEnd() == "a changed English voice" && !zip.Entries.Any(e => e.Name == "RYU_84_J.csb"),
+                      "the hand-placed English voice went into its package as RYU_84_E.csb (no Japanese one: none was changed)");
+            }
+            Check(File.ReadAllText(Path.Combine(chara, "RYU_E.csb")) == "a changed English voice" && !discarded.Any(d => d.EndsWith("RYU_E.csb")) &&
+                  File.Exists(Path.Combine(chara, "RYU_84_E.csb")), "the voice stays where it was (the whole fighter's); RYU_84_E.csb beside the costume"); 
 
             Console.WriteLine("Ryu 40, the game's own back");
             discarded.Clear();
@@ -99,6 +108,18 @@ namespace ExMoreStuff
             Check(after.All(f => !f.CanImport) && after.Count == 2, "only the two that stay as they are");
             try { ModScan.Import(game, after[0], false, discard); Check(false, "other files refused"); }
             catch (InvalidOperationException) { Check(true, "other files refused"); }
+
+            Console.WriteLine("The originals kept safe (Mods\\Legacy mods backup, the game's folders inside)");
+            string loose = Path.Combine("patch_ae2_tu3", "battle", "stage", "STG_ZZZ.emz");
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(game, loose)));
+            File.WriteAllText(Path.Combine(game, loose), "first");
+            string kept = AppFolders.BackUpOldMod(game, loose);
+            string day = Path.Combine(AppFolders.OldModsBackup, DateTime.Now.ToString("yyyy-MM-dd"));
+            Check(kept == Path.Combine(day, loose) && File.ReadAllText(kept) == "first" && !File.Exists(Path.Combine(game, loose)), "moved out of the game, its folders kept: " + kept);
+            File.WriteAllText(Path.Combine(game, loose), "second");
+            string again = AppFolders.BackUpOldMod(game, loose);
+            Check(again == Path.Combine(day, "patch_ae2_tu3", "battle", "stage", "STG_ZZZ (2).emz") && File.ReadAllText(kept) == "first" && File.ReadAllText(again) == "second",
+                  "a second one with that name doesn't replace the first: " + again);
 
             Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");
             Environment.Exit(failures == 0 ? 0 : 1);

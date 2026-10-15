@@ -14,7 +14,8 @@ $version = $version -join "."
 if ($LASTEXITCODE -ne 0) { throw "the build failed" }
 
 $publish = Join-Path $root "publish"
-if (Test-Path $publish) { [IO.Directory]::Delete($publish, $true) }
+# emptied, not deleted: an Explorer window open on it would stop the delete
+if (Test-Path $publish) { Get-ChildItem -LiteralPath $publish -Force | ForEach-Object { if ($_.PSIsContainer) { [IO.Directory]::Delete($_.FullName, $true) } else { [IO.File]::Delete($_.FullName) } } }
 $repo = Join-Path $publish "repo"
 New-Item -ItemType Directory -Force $repo | Out-Null
 foreach ($file in "README.md", "LICENSE", ".gitignore", "catalog.json", "build.bat", "make_assets.ps1", "make_publish.ps1") { Copy-Item "$root\$file" "$repo\$file" }

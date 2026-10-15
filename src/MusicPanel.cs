@@ -8,13 +8,14 @@
 // (BGM_<stage>2.csb, BGM_<stage>3.csb; it plays them when dinput8.dll is next to SSFIV.exe).
 // Every song put in the game, or saved with Save, is kept in Music\ beside the program (MusicBank.Keep): the song file
 // as it was opened, its loop and settings, and the game file it made, named TRN_3_MAIN_Jackson; opening that song
-// again brings everything back. The folder button opens Music\.
+// again brings everything back. The footer's folder button opens Music\ while this page is open.
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -34,6 +35,19 @@ namespace ExMoreStuff
 
         string game;
         MusicSlot slot;                 // the row picked (round 1)
+        string docked, dockedName;      // a docked stage's row: its zip and its name (songs go into the zip, DockedMusic)
+        string slotLabel;               // the row's name when it has one of its own ("Mishima Estate Roof (U01)"), else null
+
+        // what a docked file holds for `file` from the Music page; null when it can't be read (gone, open elsewhere)
+        static InstalledSong DockedSong(string zip, string file)
+        {
+            try { return DockedMusic.Song(zip, file); } catch (Exception) { return null; }
+        }
+
+        static byte[] DockedBank(string zip, string file)
+        {
+            try { return DockedMusic.Bank(zip, file); } catch (Exception) { return null; }
+        }
         Song song;
         string songFile;                // the song file opened (kept with the song), or null: a game file (.csb)
         double songLoudness; int songPeak = 1;   // the open song's, worked out once
@@ -61,7 +75,6 @@ namespace ExMoreStuff
         readonly Toggle loop = new Toggle("Loop") { Checked = true, Width = 84 }, bassPreview = new Toggle("Bass cut") { Width = 104 },
                         gameLevel = new Toggle("Hear it as in game") { Checked = true, Width = 170 };
         readonly Label clock = MakeLabel(Theme.Font(9f), Theme.Muted);
-        readonly FlatButton songsFolder = new FlatButton("") { Font = new Font("Segoe MDL2 Assets", 12f), Size = new Size(40, 36) };
         readonly Label startLabel = MakeLabel(Theme.Bold(9f), Color.FromArgb(70, 210, 120)), endLabel = MakeLabel(Theme.Bold(9f), Theme.Accent);
         readonly TextBox startBox = DarkBox(92), endBox = DarkBox(92);
         readonly FlatButton startHere = Small("At cursor"), endHere = Small("At cursor");
@@ -89,7 +102,7 @@ namespace ExMoreStuff
             clock.TextAlign = ContentAlignment.MiddleRight;
             Controls.AddRange(new Control[]
             {
-                title, now, openSfxt, openSong, songsFolder, openGame, songLabel, clock, wave, play, stop, testLoop, loop, bassPreview, gameLevel, whole, atStart, atEnd,
+                title, now, openSfxt, openSong, openGame, songLabel, clock, wave, play, stop, testLoop, loop, bassPreview, gameLevel, whole, atStart, atEnd,
                 startLabel, startBox, startHere, endLabel, endBox, endHere, lengthLabel, find, fit, matchLabel, seam,
                 snap, loud, smooth, volumeLabel, quieter, volumeBox, louder, volumeNote,
                 roundLabel, round, layerLabel, layer, roundNote, ultraLabel, ultraMode, lowLabel, lowMode, layerNote,
@@ -107,11 +120,6 @@ namespace ExMoreStuff
 
             openSong.Click += async (s, e) => await OpenSong();
             openSfxt.Click += async (s, e) => await OpenSfxt();
-            songsFolder.Click += (s, e) =>
-            {
-                try { Directory.CreateDirectory(AppFolders.Music); System.Diagnostics.Process.Start("explorer.exe", "\"" + AppFolders.Music + "\""); }
-                catch (Exception ex) { Say(ex.Message, true); }
-            };
             openGame.Click += async (s, e) => await OpenGameTheme();
             play.Click += (s, e) => Play(wave.CursorFrame, loop.Checked);
             stop.Click += (s, e) => player.Stop();
@@ -150,7 +158,6 @@ namespace ExMoreStuff
 
             tips.SetToolTip(openSong, "A WAV, MP3, FLAC, M4A or WMA file, or a game music file (.csb). A song from your songs folder opens with its loop and settings");
             tips.SetToolTip(openSfxt, "Music from your Street Fighter X Tekken: its stages' themes and the rest, each with its own loop (read from the game, never changed)");
-            tips.SetToolTip(songsFolder, "Your songs: every song put in the game or saved, with its loop and settings and the game file it made (" + AppFolders.Music + ")");
             tips.SetToolTip(openGame, "What this stage or fighter plays now (the round and layer picked), with its loop");
             tips.SetToolTip(testLoop, "Plays the last 4 seconds before the loop end and the jump back to the loop start, over and over");
             tips.SetToolTip(bassPreview, "Plays the song with its bass (and a little of its mids) cut, as the low-health layer's \"Bass cut\" puts it in");
@@ -216,6 +223,12 @@ namespace ExMoreStuff
             list.Controls.Clear();
             rows.Clear();
             int width = ListWidth - 46;
+            // docked stages first (user 2026-10-14): their songs go into the docked file, not the game (DockedMusic)
+            var dockedStages = Game.IsGameFolder(game) ? Docked.Load().Where(r => r.Item.IsStage).ToList() : new List<Installed>();
+            if (dockedStages.Count > 0) list.Controls.Add(new Heading("Docked", width) { Font = Theme.Bold(11f), Height = 34 });
+            foreach (var d in dockedStages)
+                AddRow(new MusicSlot { Code = d.Item.Code }, width, d.Package,
+                       Regex.Replace(d.Item.Name, @"\s*-\s*" + Regex.Escape(d.Item.Code) + "$", "", RegexOptions.IgnoreCase) + " (" + d.Item.Code + ")");
             list.Controls.Add(new Heading("Stages", width) { Font = Theme.Bold(11f), Height = 34 });
             foreach (var code in Stages.Codes)
                 AddRow(new MusicSlot { Code = code }, width);
@@ -224,20 +237,30 @@ namespace ExMoreStuff
                 .Concat(installed.Keys.Select(MusicSlot.FromFile).Where(s => !s.Fighter && Stages.IsCustomCode(s.Code)).Select(s => s.Code))
                 .Distinct().OrderBy(c => c).ToList();
             if (custom.Count > 0) list.Controls.Add(new Rule { Width = width, Height = 14, Margin = new Padding(2, 2, 2, 2) });
-            foreach (var code in custom) AddRow(new MusicSlot { Code = code }, width);
+            // by name (user 2026-10-14: "Custom stage U01" didn't say which stage): "Mishima Estate Roof (U01)", its name in the
+            // menus or the mod's; a code with a song of ours and no stage stays "Custom stage U05"
+            var names = Game.IsGameFolder(game)
+                ? Installer.Load(game).Concat(Installer.Removed(game)).Where(r => r.Item.IsStage).GroupBy(r => r.Item.Code)
+                           .ToDictionary(g => g.Key, g => g.First().Shown ?? g.First().Item.Name)
+                : new Dictionary<string, string>();
+            foreach (var code in custom)
+            {
+                string name;
+                AddRow(new MusicSlot { Code = code }, width, null, names.TryGetValue(code, out name) && !string.IsNullOrWhiteSpace(name) ? name + " (" + code + ")" : null);
+            }
             list.Controls.Add(new Heading("Fighters", width) { Font = Theme.Bold(11f), Height = 34 });
             foreach (int i in Fighters.DisplayOrder)
                 AddRow(new MusicSlot { Code = Fighters.Codes[i], Fighter = true }, width);
             list.ResumeLayout();
-            var again = slot == null ? null : rows.FirstOrDefault(r => r.Slot.File == slot.File);
+            var again = slot == null ? null : rows.FirstOrDefault(r => r.Slot.File == slot.File && r.Docked == docked);
             Select(again ?? rows.FirstOrDefault());
         }
 
-        void AddRow(MusicSlot s, int width)
+        void AddRow(MusicSlot s, int width, string dockedZip = null, string label = null)
         {
             // only slots the game has a bank for (or, for a custom stage, its stand-in stage)
             if (game != null && MusicBank.GameFile(game, s.TemplateFile) == null) return;
-            var row = new SlotRow { Slot = s, Width = width, Height = 26, Margin = new Padding(2, 1, 2, 1) };
+            var row = new SlotRow { Slot = s, Docked = dockedZip, Label = label, Width = width, Height = 26, Margin = new Padding(2, 1, 2, 1) };
             row.Click += (o, e) => Select(row);
             rows.Add(row);
             list.Controls.Add(row);
@@ -251,11 +274,12 @@ namespace ExMoreStuff
             for (int r = 1; r <= (row.Slot.Fighter ? 1 : 3); r++)
             {
                 InstalledSong mine;
-                if (installed.TryGetValue(row.Slot.InRound(r).File, out mine))
+                if (row.Docked != null ? (mine = DockedSong(row.Docked, row.Slot.InRound(r).File)) != null : installed.TryGetValue(row.Slot.InRound(r).File, out mine))
                     songs.Add((r > 1 ? "round " + r + ": " : "") + (mine.Layers[0] ?? mine.Song));
             }
             row.Song = songs.Count == 0 ? null : string.Join(", ", songs);
-            tips.SetToolTip(row, row.Song == null ? row.Slot.Name : row.Slot.Name + ": " + row.Song);
+            string named = row.Label ?? row.Slot.Name;
+            tips.SetToolTip(row, row.Song == null ? named : named + ": " + row.Song);
             row.Invalidate();
         }
 
@@ -264,6 +288,9 @@ namespace ExMoreStuff
             player.Stop();
             foreach (var r in rows) r.Selected = r == row;
             slot = row == null ? null : row.Slot;
+            docked = row == null ? null : row.Docked;
+            slotLabel = row == null ? null : row.Label;
+            dockedName = docked == null ? null : Regex.Replace(row.Label, @"\s*\(" + row.Slot.Code + @"\)$", "");
             ModesFromRecord();
             UpdateEditor();
             if (song != null) LoopChanged();
@@ -272,8 +299,8 @@ namespace ExMoreStuff
         // the other layers' choices as the song put here left them
         void ModesFromRecord()
         {
-            InstalledSong mine;
-            if (Target == null || !installed.TryGetValue(Target.File, out mine)) { ultraMode.Selected = 0; lowMode.Selected = 0; return; }
+            InstalledSong mine = null;
+            if (Target == null || (docked != null ? (mine = DockedSong(docked, Target.File)) == null : !installed.TryGetValue(Target.File, out mine))) { ultraMode.Selected = 0; lowMode.Selected = 0; return; }
             string main = mine.Layers[0];
             ultraMode.Selected = mine.Layers[1] == null ? (main == null ? 0 : 2) : mine.Layers[1] == main ? 0 : 1;
             lowMode.Selected = mine.Layers[2] == null ? (main == null ? 0 : 3) : mine.Layers[2] == main ? 0
@@ -664,16 +691,27 @@ namespace ExMoreStuff
         // `levels` (from Levels): each layer playing this song is set to be heard at the game's general loudness; null:
         // those layers play at the game's own levels for the slot. Layers playing the game's sound always get its level.
         internal static byte[] BuildFor(string game, Dictionary<string, InstalledSong> have, MusicSlot target, int layerIndex, short[] pcm, int ls, int le,
-                               string name, int ultra, int low, Func<int, double, double> levels, out InstalledSong about)
+                               string name, int ultra, int low, Func<int, double, double> levels, out InstalledSong about,
+                               byte[] start = null, InstalledSong startSong = null)
         {
             byte[] gameBank = File.ReadAllBytes(MusicBank.GameFile(game, target.TemplateFile));
-            InstalledSong mine;
-            have.TryGetValue(target.File, out mine);
-            string ourFile = MusicBank.PatchFile(game, target.File);
-            // built on our song there only while it's still the file we wrote
-            if (mine != null && !(File.Exists(ourFile) && Installer.Sha256(ourFile) == mine.Sha256)) mine = null;
-            byte[] bank = mine != null ? File.ReadAllBytes(ourFile) : gameBank;
-            var layers = mine != null ? (string[])mine.Layers.Clone() : new string[3];
+            byte[] bank;
+            string[] layers;
+            if (start != null)   // a docked file's music there (DockedMusic): built on it, its layers' songs as noted
+            {
+                bank = start;
+                layers = startSong != null ? (string[])startSong.Layers.Clone() : new string[3];
+            }
+            else
+            {
+                InstalledSong mine;
+                have.TryGetValue(target.File, out mine);
+                string ourFile = MusicBank.PatchFile(game, target.File);
+                // built on our song there only while it's still the file we wrote
+                if (mine != null && !(File.Exists(ourFile) && Installer.Sha256(ourFile) == mine.Sha256)) mine = null;
+                bank = mine != null ? File.ReadAllBytes(ourFile) : gameBank;
+                layers = mine != null ? (string[])mine.Layers.Clone() : new string[3];
+            }
             int cues = MusicBank.CueCount(gameBank);
             bank = MusicBank.Build(bank, gameBank, layerIndex, pcm, ls, le);
             layers[layerIndex] = name;
@@ -705,10 +743,13 @@ namespace ExMoreStuff
         {
             var target = Target;
             if (song == null || target == null) return;
+            if (docked != null) { await PutInDocked(target); return; }
             if (Game.IsRunning()) { Say("Close the game first, then put the song in", true); return; }
             if (MusicBank.GameFile(game, target.TemplateFile) == null) { Say("The game has no music to build " + target.Name + " on", true); return; }
             string owner = MusicBank.PackageOwning(game, target);
-            if (owner != null) { Say(target.File + " is the music of " + owner + ": save the song as .csb and put it in that package", true); return; }
+            if (owner != null && MessageBox.Show(FindForm(), target.File + " is the music of " + owner + ", from its package.\n\nPut this song in anyway? " +
+                    "If the stage is updated, switched off or deleted, this song comes off again (it stays in your songs folder).",
+                    "EX More Stuff", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             player.Stop();
             var pcm = Preview(false);
             int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
@@ -726,10 +767,35 @@ namespace ExMoreStuff
                 catch (Exception ex) { keepProblem = ex.Message; }
             })) return;
             Reload();
-            string where = target.Name + (target.Round > 1 ? ", round " + target.Round : "") + (layerIndex > 0 ? ", " + MusicBank.LayerNames[layerIndex].ToLowerInvariant() + " layer" : "");
+            string where = (slotLabel ?? target.Name) + (target.Round > 1 ? ", round " + target.Round : "") + (layerIndex > 0 ? ", " + MusicBank.LayerNames[layerIndex].ToLowerInvariant() + " layer" : "");
             if (roundProblem != null) Say(name + " is in for " + where + ", but " + roundProblem, true);
             else if (keepProblem != null) Say(name + " now plays for " + where + ", but it couldn't be kept in your songs folder: " + keepProblem, true);
             else Say(name + " now plays for " + where + ". Start the game to hear it"); 
+        }
+
+        // A docked stage's song: into its docked file (its zip, as BGM_<code>.csb), built on the music already in it, never
+        // into the game (so the game may be open); kept in the songs folder as Put in the game keeps it.
+        async Task PutInDocked(MusicSlot target)
+        {
+            if (MusicBank.GameFile(game, target.TemplateFile) == null) { Say("The game has no music to build " + target.Name + " on", true); return; }
+            player.Stop();
+            var pcm = Preview(false);
+            int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
+            string name = song.Name, g = game, zip = docked, source = songFile, settings = Settings(), keepProblem = null;
+            var levels = Levels();
+            if (!await Run("Putting " + name + " in the docked file", () =>
+            {
+                InstalledSong about;
+                var bank = BuildFor(g, null, target, layerIndex, pcm, ls, le, name, ultra, low, levels, out about,
+                                    DockedBank(zip, target.File) ?? File.ReadAllBytes(MusicBank.GameFile(g, target.TemplateFile)), DockedSong(zip, target.File));
+                DockedMusic.Put(zip, target.File, bank, about);
+                try { MusicBank.Keep(target, layerIndex, name, bank, source, ls, le, settings); }
+                catch (Exception ex) { keepProblem = ex.Message; }
+            })) return;
+            Reload();
+            string where = dockedName + (target.Round > 1 ? ", round " + target.Round : "") + (layerIndex > 0 ? ", " + MusicBank.LayerNames[layerIndex].ToLowerInvariant() + " layer" : "");
+            if (keepProblem != null) Say(name + " is in the docked file for " + where + ", but it couldn't be kept in your songs folder: " + keepProblem, true);
+            else Say(name + " is in the docked file for " + where);
         }
 
         // Save: kept in the songs folder (overwriting) as Put in the game keeps it, without putting it in
@@ -741,15 +807,17 @@ namespace ExMoreStuff
             player.Stop();
             var pcm = Preview(false);
             int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
-            string settings = Settings(), name = song.Name, g = game, source = songFile, kept = null;
+            string settings = Settings(), name = song.Name, g = game, source = songFile, kept = null, zip = docked;
             var have = installed;
             var levels = Levels();
             if (!await Run("Saving " + name, () =>
             {
                 InstalledSong about;
-                kept = MusicBank.Keep(target, layerIndex, name, BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, levels, out about), source, ls, le, settings);
+                byte[] start = zip == null ? null : DockedBank(zip, target.File) ?? File.ReadAllBytes(MusicBank.GameFile(g, target.TemplateFile));   // a docked stage's: on its file's music
+                kept = MusicBank.Keep(target, layerIndex, name, BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, levels, out about,
+                                                                      start, zip == null ? null : DockedSong(zip, target.File)), source, ls, le, settings);
             })) return;
-            Say("Saved as " + kept + " in your songs folder (the folder button)");
+            Say("Saved as " + kept + " in your songs folder (the Music folder button at the bottom)");
             Toast.Show(this, "Songs saved to disk");   // always "songs" (user)
         }
 
@@ -757,6 +825,17 @@ namespace ExMoreStuff
         {
             var target = Target;
             if (target == null) return;
+            if (docked != null)   // out of the docked file
+            {
+                try
+                {
+                    DockedMusic.TakeOut(docked, target.File);
+                    Reload();
+                    Say(dockedName + (target.Round > 1 ? " round " + target.Round + "'s" : "'s") + " music is out of the docked file");
+                }
+                catch (Exception ex) { Say(ex.Message, true); }
+                return;
+            }
             if (Game.IsRunning()) { Say("Close the game first", true); return; }
             try
             {
@@ -791,10 +870,16 @@ namespace ExMoreStuff
         {
             var t = Target;
             bool stage = slot != null && !slot.Fighter;
-            title.Text = slot == null ? "Music" : slot.Name;
+            title.Text = slot == null ? "Music" : slotLabel ?? slot.Name;
             InstalledSong mine = null;
-            if (t != null) installed.TryGetValue(t.File, out mine);
+            bool inDocked = false;   // a docked stage's file has music for this round
+            if (t != null && docked != null) { mine = DockedSong(docked, t.File); inDocked = mine != null || DockedBank(docked, t.File) != null; }
+            else if (t != null) installed.TryGetValue(t.File, out mine);
             if (t == null) now.Text = "";
+            else if (docked != null)
+                now.Text = mine != null ? "In the docked file: your \"" + (mine.Layers[0] ?? mine.Song) + "\"  (" + t.File + ")"
+                         : inDocked ? "In the docked file: its own music  (" + t.File + ")"
+                         : "Not in the docked file yet: a song put here is built on " + Stages.Name(t.TemplateCode) + "'s music  (" + t.File + ")";
             else if (mine != null)
             {
                 string layers = !stage ? "" : "   Ultra: " + Describe(mine.Layers[1], mine.Layers[0]) + ",  low health: " + Describe(mine.Layers[2], mine.Layers[0]);
@@ -826,8 +911,10 @@ namespace ExMoreStuff
             foreach (var c in new Control[] { play, stop, testLoop, bassPreview, whole, atStart, atEnd, startBox, endBox, startHere, endHere, find, fit, save })
                 c.Enabled = has;
             install.Enabled = has && t != null && listProblem == null;
-            install.Text = Layer > 0 ? "Put on the " + MusicBank.LayerNames[Layer] + " layer" : "Put in the game";
-            restore.Enabled = mine != null && listProblem == null;
+            install.Text = Layer > 0 ? "Put on the " + MusicBank.LayerNames[Layer] + " layer" : docked != null ? "Put in the docked file" : "Put in the game";
+            restore.Text = docked != null ? "Take it out of the docked file" : "Give back the game's music";
+            restore.Enabled = docked != null ? inDocked : mine != null && listProblem == null;
+            foreach (var b in new[] { install, restore }) b.Width = TextRenderer.MeasureText(b.Text, b.Font).Width + 36;   // the docked wording is longer
             openGame.Enabled = t != null;
             if (!has) { startBox.Text = endBox.Text = lengthLabel.Text = matchLabel.Text = volumeNote.Text = ""; seam.Show(null, 0, 0); }
             player.Volume = (float)PlaybackGain();   // the slot, layer or Bass cut may have changed
@@ -888,9 +975,7 @@ namespace ExMoreStuff
             title.Bounds = new Rectangle(x, 8, ew - 520, 28);
             now.Bounds = new Rectangle(x, 36, ew - 520, 18);
             openGame.Location = new Point(right - openGame.Width, 10);
-            songsFolder.Location = new Point(openGame.Left - songsFolder.Width - 8, 10);
-            songsFolder.Height = openGame.Height;
-            openSong.Location = new Point(songsFolder.Left - openSong.Width - 6, 10);
+            openSong.Location = new Point(openGame.Left - openSong.Width - 6, 10);
             openSfxt.Location = new Point(openSong.Left - openSfxt.Width - 6, 10);
             title.Width = now.Width = Math.Max(40, openSfxt.Left - x - 10);
             clock.Bounds = new Rectangle(right - 170, 60, 170, 20);
@@ -987,6 +1072,7 @@ namespace ExMoreStuff
     {
         public MusicSlot Slot;
         public string Song;
+        public string Docked, Label;   // a docked stage's: its zip, and its name in the list ("Urban War Zone (U05)")
         bool selected, hover;
         public bool Selected { get { return selected; } set { selected = value; Invalidate(); } }
 
@@ -1004,7 +1090,7 @@ namespace ExMoreStuff
                 using (var fill = new SolidBrush(selected ? Theme.ButtonHover : Theme.TileHover))
                     g.FillPath(fill, path);
             if (selected) using (var bar = new SolidBrush(Theme.Accent)) g.FillRectangle(bar, 0, 5, 3, Height - 10);
-            string name = Slot.Fighter ? Fighters.Name(Slot.Code) : Slot.Name;
+            string name = Label ?? (Slot.Fighter ? Fighters.Name(Slot.Code) : Slot.Name);
             int noteWidth = Song == null ? 0 : 14;
             Theme.Draw(g, name, Theme.Bold(9f), selected ? Theme.Text : Theme.Muted, new Rectangle(10, 0, Width - 14 - noteWidth, Height),
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter);

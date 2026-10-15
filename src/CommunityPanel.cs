@@ -11,14 +11,16 @@ using System.Windows.Forms;
 namespace ExMoreStuff
 {
     // The Browse Mods tab: USF4's skins and stages on GameBanana, made and shared for free. Respect to the modders: each
-    // card names its maker in gold, and the name opens the mod's page. A skin installs in one click into its shared code
+    // card names its maker in gold (a click shows all their mods), and a tiny blue icon opens the mod's page. A skin installs in one click into its shared code
     // (SharedCodes), built with this PC's game files; a stage into a stage code of its own (ModFile), with its music.
     class CommunityPanel : Clear
     {
         public event Action Changed;          // EX More Stuff's lists need reading again
         public event Action<bool> Working;    // an install started or ended (the rest of the window waits)
         public Func<string> Blocked;          // why nothing can install right now, or null
+        public Func<Task> BeforeInstall;      // the window's first-time PC check (PerfTest), before anything goes in
         public event Action<int> UpdatesChanged;   // how many installed mods have a newer version on GameBanana (the tab's dot)
+        public event Action<bool> NewFromFavorites;   // Notifications has something not seen yet (the tab's heart)
 
         // one card's mod
         sealed class Entry
@@ -42,6 +44,7 @@ namespace ExMoreStuff
         int shownCount = PageSize, filledWidth, topWidth;
         const int PageSize = 36;
         string pointKey;   // a card to scroll to and light up (Highlight)
+        Tuple<long, string> creatorOf;   // a creator to show once the list is in: a mod of theirs and their name (ShowCreatorOf)
         readonly ScrollList list = new ScrollList { Dock = DockStyle.Fill, AllowDrop = true };
         static readonly Dictionary<string, Task<Image>> thumbnails = new Dictionary<string, Task<Image>>();
         readonly ToolTip tips = new ToolTip { InitialDelay = 1000 };
@@ -50,14 +53,49 @@ namespace ExMoreStuff
         Heading heading;
         ShadowLabel note;
         readonly Clear tools = new Clear { Height = 40, Margin = new Padding(8, 2, 8, 2) };
-        readonly TextBox search = new TextBox { Width = 220, BackColor = Theme.Well, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle, Font = Theme.Font(10.5f) };
+        readonly TextBox search = new TextBox { Width = 150, BackColor = Theme.Well, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle, Font = Theme.Font(10.5f) };
         readonly FlatButton stagesButton = new FlatButton("Stages"), characterButton = new FlatButton("Character  ▾");
+        // Refresh here too, left of Stages, in our orange (user 2026-10-14): the window's Refresh (RefreshAll), else GameBanana's list again
+        readonly FlatButton refreshButton = new FlatButton("Refresh", true);
+        public Func<Task> RefreshAll;
+        // while it works (pressed, or GameBanana's list being read): "Refreshing." ".." "..." (user 2026-10-14: "make it more obvious
+        // when its refreshing"), clicks waiting until it's done
+        bool refreshPressed;
+        readonly Timer refreshDots = new Timer { Interval = 350 };
+        int dots;
+
+        void ShowRefresh()
+        {
+            bool busy = refreshPressed || loading;
+            if (busy && !refreshDots.Enabled) { dots = 0; refreshDots.Start(); }
+            if (!busy) refreshDots.Stop();
+            refreshButton.Text = busy ? "Refreshing" + new string('.', dots % 3 + 1) : "Refresh";
+            refreshButton.Invalidate();
+        }
+        readonly FlatButton creatorsButton = new FlatButton("Creators  ▾"), notificationsButton = new FlatButton("♥  Notifications");
+        ToolStripDropDown creatorsPicking;   // the Creators list while it's open
+        int creatorsClosedAt;
+        bool creatorsClosedOnButton;
+        List<GameBanana.Mod> news = new List<GameBanana.Mod>();   // Notifications: new mods from the favorite creators
+        HashSet<long> newIds = new HashSet<long>();
+        bool? newTold;
         readonly FlatButton byDate = new FlatButton("Newest", true), byCount = new FlatButton("Most Downloaded");
-        readonly FlatButton updatesButton = new FlatButton("Updates"), updateAll = new FlatButton("Update all", true) { Margin = new Padding(8, 4, 8, 6) };
+        readonly FlatButton updatesButton = new FlatButton("Updates"), updateAll = new FlatButton("Update all", true) { Margin = new Padding(8, 4, 8, 6), Fill = Theme.Update };
         HashSet<string> outdated = new HashSet<string>();   // installed mods with a newer version (their keys)
         int updatesTold = -1;
         bool chaining, stopChain;   // Update all running, and asked to stop after the one being updated
-        string pick;   // what's shown: everything (null), "stages", "updates", or a fighter's code
+        string pick;   // what's shown: everything (null), "stages", "updates", a fighter's code, "favorites", "notifications", "creator:<key>" or "collection:<id>"
+        bool CreatorPicked { get { return pick != null && pick.StartsWith("creator:"); } }
+        // Collections (user 2026-10-14): a creator's GameBanana collection of their own mods (GameBanana.Collections), its
+        // mods as cards with Install all / New Mods, which install each in turn as Update all does
+        readonly FlatButton collectionsButton = new FlatButton("Mod Packs") { Visible = false };   // GameBanana's collections, called Mod Packs (user 2026-10-14)
+        readonly FlatButton collectionAction = new FlatButton("Install all", true) { Margin = new Padding(8, 4, 8, 6) };
+        ShadowLabel collectionNote;
+        bool CollectionPicked { get { return pick != null && pick.StartsWith("collection:"); } }
+        GameBanana.Collection PickedCollection
+        {
+            get { long id; return CollectionPicked && long.TryParse(pick.Substring(11), out id) ? GameBanana.Collections.FirstOrDefault(c => c.Id == id) : null; }
+        }
         ToolStripDropDown picking;   // the Character list while it's open
         int pickerClosedAt;
         bool closedOnButton;
@@ -75,16 +113,16 @@ namespace ExMoreStuff
                 target.DragDrop += async (s, e) => { string file = Dropped(e); if (file != null) await InstallFile(file); };
             }
             // Stages: only stages (again: everything); Character: the list of fighters to pick one from
-            stagesButton.Click += (s, e) => { pick = pick == "stages" ? null : "stages"; shownCount = PageSize; Fill(); };
+            stagesButton.Click += (s, e) => { pick = pick == "stages" ? null : "stages"; Refilter(); };
             // Character: back to all characters, and the list opens; again while it's open: it closes. (A click on the button
             // first closes the list as a click outside it, so a close that just happened there is that click's doing.)
             characterButton.Click += (s, e) =>
             {
                 if (picking != null) { picking.Close(); return; }
                 if (closedOnButton && Environment.TickCount - pickerClosedAt < 400) { closedOnButton = false; return; }
-                if (pick != null) { pick = null; shownCount = PageSize; Fill(); }
+                if (pick != null) { pick = null; Refilter(); }
                 picking = CharacterPicker.Show(characterButton, null, Portrait, code => entries.Count(m => m.Fighters.Contains(code)),
-                                               code => { pick = code; shownCount = PageSize; Fill(); });
+                                               code => { pick = code; Refilter(); });
                 picking.Closed += (s2, e2) =>
                 {
                     picking = null;
@@ -94,14 +132,43 @@ namespace ExMoreStuff
             };
             search.HandleCreated += (s, e) => SendMessage(search.Handle, 0x1501, (IntPtr)1, "Search mods");   // EM_SETCUEBANNER: the grey hint
             search.TextChanged += (s, e) => { if (!quiet) { typing.Stop(); typing.Start(); } };
-            typing.Tick += (s, e) => { typing.Stop(); shownCount = PageSize; Fill(); };
+            typing.Tick += (s, e) => { typing.Stop(); Refilter(); };
             // two sort buttons: the other one switches to it; the one in use turns around (Newest <-> Oldest, Most <-> Least Downloaded)
-            byDate.Click += (s, e) => { if (byDownloads) byDownloads = false; else newestFirst = !newestFirst; shownCount = PageSize; Fill(); };
-            byCount.Click += (s, e) => { if (!byDownloads) byDownloads = true; else mostFirst = !mostFirst; shownCount = PageSize; Fill(); };
+            byDate.Click += (s, e) => { if (byDownloads) byDownloads = false; else newestFirst = !newestFirst; Refilter(); };
+            byCount.Click += (s, e) => { if (!byDownloads) byDownloads = true; else mostFirst = !mostFirst; Refilter(); };
             // Updates: only the installed mods with a newer version (again: everything); Update all: each in turn
-            updatesButton.Click += (s, e) => { pick = pick == "updates" ? null : "updates"; shownCount = PageSize; Fill(); };
+            updatesButton.Click += (s, e) => { pick = pick == "updates" ? null : "updates"; Refilter(); };
             updateAll.Click += async (s, e) => await UpdateAll();
-            tools.Controls.AddRange(new Control[] { search, stagesButton, characterButton, updatesButton, byDate, byCount });
+            // Creators: the list of creators (Favorites first) to pick from, as Character's; Notifications: what's new from them
+            creatorsButton.Click += (s, e) =>
+            {
+                if (creatorsPicking != null) { creatorsPicking.Close(); return; }
+                if (creatorsClosedOnButton && Environment.TickCount - creatorsClosedAt < 400) { creatorsClosedOnButton = false; return; }
+                if (pick == CreatorPicker.FavoritesKey || CreatorPicked) { pick = null; Refilter(); }
+                creatorsPicking = CreatorPicker.Show(creatorsButton, CreatorList(), key => { pick = key == CreatorPicker.FavoritesKey ? key : "creator:" + key; Refilter(); });
+                creatorsPicking.Closed += (s2, e2) =>
+                {
+                    creatorsPicking = null;
+                    creatorsClosedAt = Environment.TickCount;
+                    creatorsClosedOnButton = creatorsButton.ClientRectangle.Contains(creatorsButton.PointToClient(Cursor.Position));
+                };
+            };
+            notificationsButton.Click += (s, e) => { if (pick == "notifications") { pick = null; Refilter(); } else ShowNotifications(); };
+            tips.SetToolTip(notificationsButton, "New mods from your favorite creators: the last 6 months, not installed");
+            // Mod Packs: a page of the packs, a card each (user 2026-10-14: "open it like another browser, each pack gets its own
+            // card"); pressed again, or from a pack's mods: everything
+            collectionsButton.Click += (s, e) => { pick = pick == "packs" || CollectionPicked ? null : "packs"; Refilter(); list.AutoScrollPosition = Point.Empty; };
+            collectionAction.Click += async (s, e) => { if (PickedCollection != null) await InstallCollection(PickedCollection); };
+            refreshButton.Click += async (s, e) =>
+            {
+                if (refreshPressed || loading) return;
+                refreshPressed = true;
+                ShowRefresh();
+                try { if (RefreshAll != null) await RefreshAll(); else ReadAgain(); }
+                finally { refreshPressed = false; ShowRefresh(); }
+            };
+            refreshDots.Tick += (s, e) => { dots++; ShowRefresh(); };
+            tools.Controls.AddRange(new Control[] { search, refreshButton, stagesButton, characterButton, creatorsButton, collectionsButton, notificationsButton, updatesButton, byDate, byCount });
         }
 
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
@@ -114,6 +181,7 @@ namespace ExMoreStuff
         }
 
         bool stale;   // the lists changed while the page was hidden: its cards are built when it's shown
+        string standing;   // how GameBanana answered (a warning that stays), or null
 
         public void SetGame(string folder)
         {
@@ -126,6 +194,24 @@ namespace ExMoreStuff
         {
             if (!loaded && !loading) { var ignored = Load(); }
         }
+
+        /// <summary>Reads GameBanana's list again (the footer's Refresh; user 2026-10-12: a mod just uploaded didn't come
+        /// up): new uploads and files GameBanana has finished checking since show up.</summary>
+        public void ReadAgain()
+        {
+            if (!loading && !working) { var ignored = Load(true); }
+        }
+
+        // The player changed what's shown (filter, search, sort): from the top, and what an install said goes.
+        void Refilter()
+        {
+            shownCount = PageSize;
+            ClearSaid();
+            Fill();
+        }
+
+        // What an install or update said goes (not while one runs); how GameBanana answered stays.
+        void ClearSaid() { if (!working) Say(standing ?? "", standing != null); }
 
         /// <summary>Shows a mod's card (its key: "gamebanana:123:"), lit up for a moment.</summary>
         public void Highlight(string key)
@@ -142,6 +228,7 @@ namespace ExMoreStuff
         protected override void OnVisibleChanged(EventArgs e)
         {
             base.OnVisibleChanged(e);
+            if (!Visible) ClearSaid();
             if (Visible && !loaded && !loading) { var ignored = Load(); }
             else if (Visible && stale) Fill();
         }
@@ -152,19 +239,23 @@ namespace ExMoreStuff
             if (game != null && Visible && Math.Abs(list.ClientSize.Width - filledWidth) > 4) Fill();
         }
 
-        async Task Load()
+        async Task Load(bool again = false)
         {
             loading = true;
+            ShowRefresh();
             Say("Reading GameBanana...");
-            try { mods = await GameBanana.All(); holders = SharedCodes.Holders(mods); problem = null; }
+            try { mods = await (again ? GameBanana.Again() : GameBanana.All()); holders = SharedCodes.Holders(mods); problem = null; }
             catch (Exception ex) { mods = null; problem = ex.Message; }
             loading = false;
+            ShowRefresh();
             loaded = mods != null;
             entries = Merge();
+            if (creatorOf != null) { PickCreator(creatorOf.Item1, creatorOf.Item2); creatorOf = null; }
             // read at start for the updates dot: the cards wait until the page is opened
             if (Visible) Fill(); else { stale = true; Recount(); }
-            if (problem != null) Say("GameBanana isn't answering right now: check your internet connection, then try again later", true);
-            else if (GameBanana.Stale) Say("GameBanana isn't answering right now, so this is its list " + Kept() + ". Installing needs it back", true);
+            standing = problem != null ? "GameBanana isn't answering right now: check your internet connection, then try again later"
+                     : GameBanana.Stale ? "GameBanana isn't answering right now, so this is its list " + Kept() + ". Installing needs it back" : null;
+            if (standing != null) Say(standing, true);
             else if (status.ForeColor != Theme.Warning) Say("");
         }
 
@@ -205,8 +296,12 @@ namespace ExMoreStuff
         {
             string query = search.Text.Trim().ToLowerInvariant();
             string[] words = Regex.Split(query, @"\s+").Where(w => w != "").ToArray();
-            var shown = entries.Where(e => pick == null || (pick == "stages" ? e.Stage : pick == "updates" ? outdated.Contains(e.Key) : e.Fighters.Contains(pick)))
+            var shown = entries.Where(e => pick == null || (pick == "packs" ? false : pick == "stages" ? e.Stage : pick == "updates" ? outdated.Contains(e.Key) :
+                                               pick == CreatorPicker.FavoritesKey ? Creators.IsFavorite(e.Mod) : pick == "notifications" ? newIds.Contains(e.Mod.Id) :
+                                               CreatorPicked ? Creators.Key(e.Mod) == pick.Substring(8) :
+                                               CollectionPicked ? PickedCollection != null && PickedCollection.Mods.Contains(e.Mod.Id) : e.Fighters.Contains(pick)))
                                .Where(e => words.All(w => e.Words.Contains(w)) || (query != "" && Squeezed(e.Mod.Author) == Squeezed(query)));
+            if (pick == "notifications") return shown.OrderByDescending(e => e.Date).ToList();   // what's new: newest first
             if (byDownloads) return (mostFirst ? shown.OrderByDescending(e => e.Mod.Downloads) : shown.OrderBy(e => e.Mod.Downloads)).ToList();
             return (newestFirst ? shown.OrderByDescending(e => e.Date) : shown.OrderBy(e => e.Date)).ToList();
         }
@@ -218,13 +313,27 @@ namespace ExMoreStuff
             outdated = new HashSet<string>(entries.Where(e =>
             {
                 InGame g;
-                return installed.TryGetValue(e.Key, out g) && !g.Versions.All(v => v == "" || v == Signature(e.Mod));
+                // an update only once GameBanana has passed its new files (a file it's still checking isn't one yet)
+                return installed.TryGetValue(e.Key, out g) && Wanted(e.Mod).Count > 0 && !g.Versions.All(v => v == "" || v == Signature(e.Mod));
             }).Select(e => e.Key));
-            if (outdated.Count != updatesTold)
+            // a collection installed from (one of its mods in): its mods not in yet are new too, for the purple dot (user 2026-10-14)
+            var listedIds = new HashSet<long>(entries.Select(e => e.Mod.Id));
+            int collectionNew = GameBanana.Collections.Where(c => c.Mods.Any(id => installed.ContainsKey("gamebanana:" + id + ":")))
+                .SelectMany(c => c.Mods).Distinct().Count(id => listedIds.Contains(id) && !installed.ContainsKey("gamebanana:" + id + ":"));
+            if (outdated.Count + collectionNew != updatesTold)
             {
-                updatesTold = outdated.Count;
+                updatesTold = outdated.Count + collectionNew;
                 var told = UpdatesChanged;
-                if (told != null) told(outdated.Count);
+                if (told != null) told(updatesTold);
+            }
+            news = Creators.New(entries.Select(e => e.Mod), m => installed.ContainsKey("gamebanana:" + m.Id + ":"), DateTime.Now);
+            newIds = new HashSet<long>(news.Select(m => m.Id));
+            bool unseen = Creators.Unseen(news);
+            if (unseen != newTold)
+            {
+                newTold = unseen;
+                var tell = NewFromFavorites;
+                if (tell != null) tell(unseen);
             }
             return installed;
         }
@@ -236,21 +345,35 @@ namespace ExMoreStuff
         {
             public readonly List<string> Into = new List<string>();      // "Blanka 08", "stage C72"
             public readonly List<string> Versions = new List<string>();  // the GameBanana files each was built from (Version)
+            public readonly List<Installed> Records = new List<Installed>(); // those in the game now (for their size warnings)
         }
 
         Dictionary<string, InGame> Installed()
         {
             var result = new Dictionary<string, InGame>();
             if (!Game.IsGameFolder(game)) return result;
-            foreach (Installed r in Installer.Load(game).Concat(Installer.Removed(game)))
+            var inGame = Installer.Load(game);
+            foreach (Installed r in inGame.Concat(Installer.Removed(game)))
             {
                 Match m = Regex.Match(r.Item.Id ?? "", @"^(gamebanana:[^:]+:)");
                 if (!m.Success) continue;
                 string key = m.Groups[1].Value;
                 if (!result.ContainsKey(key)) result[key] = new InGame();
-                result[key].Into.Add(r.Item.IsStage ? "stage " + r.Item.Code : ExMoreStuff.Fighters.Name(r.Item.Fighter) + " " + r.Item.Slot.ToString("D2") +
-                                     (r.Item.IsColor ? " color " + r.Item.Color : ""));
+                // only whose it is, in caps: the character, or STAGE (user 2026-10-12: no slot, no code, "just say the name")
+                string where = r.Item.IsStage ? "STAGE" : ExMoreStuff.Fighters.Name(r.Item.Fighter).ToUpperInvariant();
+                if (!result[key].Into.Contains(where)) result[key].Into.Add(where);
                 result[key].Versions.Add(r.Item.Version ?? "");
+                if (inGame.Contains(r)) result[key].Records.Add(r);
+            }
+            foreach (Override o in Overrides.Load(game))   // override stages from GameBanana
+            {
+                Match m = Regex.Match(o.Id ?? "", @"^(gamebanana:[^:]+:)");
+                if (!m.Success) continue;
+                string key = m.Groups[1].Value;
+                if (!result.ContainsKey(key)) result[key] = new InGame();
+                string replaced = Stages.Name(o.Target).ToUpperInvariant();   // an override: the stage it plays as
+                if (!result[key].Into.Contains(replaced)) result[key].Into.Add(replaced);
+                result[key].Versions.Add(o.Version ?? "");
             }
             return result;
         }
@@ -270,20 +393,14 @@ namespace ExMoreStuff
                 .Select(g => g.OrderBy(f => f.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? 0 : 1).First()).ToList();
         }
 
-        // where a mod goes, from the names in its files: "Blanka 08", "Blanka (only you see it)", "a stage of its own ..."
+        // whose a mod is, from the names in its files, in caps (user 2026-10-12: no slot or code, "just say the name of
+        // the character or stage"): "SAKURA", "STAGE", an override's "FESTIVAL AT THE OLD TEMPLE"; null: nothing to install
         string Where(GameBanana.Mod mod)
         {
-            var costumes = SkinImport.Named(Wanted(mod).SelectMany(f => f.Contents)).ToList();
-            var parts = costumes.Select(c =>
-            {
-                int slot = SharedCodes.Slot(mod, c.Item1, c.Item2, holders);
-                return ExMoreStuff.Fighters.Name(c.Item1) + (slot > 0 ? " " + slot.ToString("D2") : " (only you see it)");
-            }).Distinct().ToList();
-            if (HasStage(mod))
-            {
-                string stageCode = StageCodes(mod).Select(c => SharedCodes.StageCode(mod, c)).FirstOrDefault(c => c != null);
-                parts.Add(stageCode != null ? "stage " + stageCode : "a stage of its own (only you see it)");
-            }
+            string replaces = Overrides.Target(Wanted(mod).SelectMany(f => f.Contents));
+            if (replaces != null) return Stages.Name(replaces).ToUpperInvariant();   // an override: the stage it plays as
+            var parts = SkinImport.Named(Wanted(mod).SelectMany(f => f.Contents)).Select(c => ExMoreStuff.Fighters.Name(c.Item1).ToUpperInvariant()).Distinct().ToList();
+            if (HasStage(mod)) parts.Add("STAGE");
             return parts.Count > 0 ? string.Join(", ", parts) : null;
         }
 
@@ -295,9 +412,8 @@ namespace ExMoreStuff
                 if (heading != null) { heading.Dispose(); note.Dispose(); }
                 topWidth = width;
                 heading = new Heading("Browse Mods", width);
-                note = ShadowLabel.Note("USF4's skins and stages on GameBanana, made and shared for free by its modders. Install puts one in as a costume or stage of its own, " +
-                            "built with your own game's files, so the game's own stay as they are. A skin goes in a code that's the same for everyone who has it, so " +
-                            "players see it on each other. Click a modder's name to visit the mod's page and thank them.", width);
+                // the user's own words, exactly (2026-10-13: "Exactly this nothing more")
+                note = ShadowLabel.Note("Players who use the same stages and costumes will see each other's mods in rollback games.", width);   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                 tools.Width = width - 16;
                 status.Width = width - 16;
             }
@@ -305,23 +421,45 @@ namespace ExMoreStuff
             byCount.Text = mostFirst ? "Most Downloaded" : "Least Downloaded";
             byDate.Primary = !byDownloads;
             byCount.Primary = byDownloads;
-            foreach (FlatButton b in new[] { byDate, byCount }) { b.Width = TextRenderer.MeasureText(b.Text, b.Font).Width + 36; b.Invalidate(); }
-            search.Location = new Point(0, (tools.Height - search.Height) / 2);
+            foreach (FlatButton b in new[] { byDate, byCount }) { b.Width = TextRenderer.MeasureText(b.Text, b.Font).Width + 30; b.Invalidate(); }
+            search.Location = new Point(0, (40 - search.Height) / 2);   // on the first line
             stagesButton.Text = "Stages";
             characterButton.Text = (ExMoreStuff.Fighters.IsCode(pick ?? "") ? ExMoreStuff.Fighters.Name(pick) : "Character") + "  ▾";
             updatesButton.Text = "Updates (" + outdated.Count + ")";
+            string creator = CreatorPicked ? CreatorName(pick.Substring(8)) : null;
+            if (creator != null && creator.Length > 18) creator = creator.Substring(0, 17) + "…";
+            creatorsButton.Text = (pick == CreatorPicker.FavoritesKey ? "Favorites" : creator ?? "Creators") + "  ▾";
+            creatorsButton.Primary = pick == CreatorPicker.FavoritesKey || CreatorPicked;
+            notificationsButton.Text = "♥  Notifications" + (news.Count > 0 ? " (" + news.Count + ")" : "");
+            notificationsButton.Primary = pick == "notifications";
             updatesButton.Primary = pick == "updates";
+            // something to see: Notifications pink, Updates purple (user 2026-10-14); orange while it's the one shown
+            notificationsButton.Fill = news.Count > 0 && pick != "notifications" ? Theme.Notify : (Color?)null;
+            updatesButton.Fill = outdated.Count > 0 && pick != "updates" ? Theme.Update : (Color?)null;
             updatesButton.Visible = outdated.Count > 0 || chaining;
             updateAll.Text = chaining ? (stopChain ? "Stopping..." : "Stop") : "Update all";
             updateAll.Primary = !chaining;
             stagesButton.Primary = pick == "stages";
             characterButton.Primary = ExMoreStuff.Fighters.IsCode(pick ?? "");
-            foreach (FlatButton b in new[] { stagesButton, characterButton, updatesButton, updateAll }) { b.Width = TextRenderer.MeasureText(b.Text, b.Font).Width + 36; b.Invalidate(); }
-            stagesButton.Location = new Point(search.Right + 12, 2);
+            // Mod Packs: shown once there's one (that keeps the rule, with mods on the list); lit on its page and in a pack
+            collectionsButton.Visible = GameBanana.Collections.Any(c => entries.Any(e => c.Mods.Contains(e.Mod.Id)));
+            collectionsButton.Text = "Mod Packs";
+            collectionsButton.Primary = pick == "packs" || CollectionPicked;
+            foreach (FlatButton b in new[] { stagesButton, characterButton, creatorsButton, collectionsButton, notificationsButton, updatesButton, updateAll }) { b.Width = TextRenderer.MeasureText(b.Text, b.Font).Width + 30; b.Invalidate(); }
+            refreshButton.Width = TextRenderer.MeasureText("Refreshing...", refreshButton.Font).Width + 30;   // its widest: nothing moves while it works
+            refreshButton.Location = new Point(search.Right + 12, 2);
+            stagesButton.Location = new Point(refreshButton.Right + 6, 2);
             characterButton.Location = new Point(stagesButton.Right + 6, 2);
-            updatesButton.Location = new Point(characterButton.Right + 6, 2);
-            byDate.Location = new Point((updatesButton.Visible ? updatesButton : characterButton).Right + 24, 2);
+            creatorsButton.Location = new Point(characterButton.Right + 6, 2);
+            collectionsButton.Location = new Point(creatorsButton.Right + 6, 2);
+            notificationsButton.Location = new Point((collectionsButton.Visible ? collectionsButton : creatorsButton).Right + 6, 2);
+            updatesButton.Location = new Point(notificationsButton.Right + 6, 2);
+            byDate.Location = new Point((updatesButton.Visible ? updatesButton : notificationsButton).Right + 18, 2);
             byCount.Location = new Point(byDate.Right + 6, 2);
+            // too wide for one line (Updates showing, a narrow window): the sort buttons go on a second line
+            bool wrap = byCount.Right > tools.Width;
+            if (wrap) { byDate.Location = new Point(0, 44); byCount.Location = new Point(byDate.Right + 6, 44); }
+            tools.Height = wrap ? 84 : 40;
         }
 
         void Fill()
@@ -330,10 +468,23 @@ namespace ExMoreStuff
             int width = Math.Max(400, list.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 16);
             stale = false;
             var installed = Recount();
+            if (pick == "notifications" && Creators.Unseen(news)) { Creators.Seen(news); installed = Recount(); }   // opened: the tab's heart goes
             if (pick == "updates" && outdated.Count == 0 && !chaining) pick = null;
             LayOutTop(width);
-            var top = pick == "updates" || chaining ? new Control[] { heading, note, tools, updateAll, status } : new Control[] { heading, note, tools, status };
+            var top = pick == "updates" || (chaining && !collectionChain) ? new Control[] { heading, note, tools, updateAll, status } : new Control[] { heading, note, tools, status };
+            // a picked collection: what it is, and Install all / New Mods / All installed
+            var collection = PickedCollection;
+            if (CollectionPicked && collection == null) pick = null;   // gone from GameBanana's list
+            if (collection != null)
+            {
+                int count = entries.Count(e => collection.Mods.Contains(e.Mod.Id));
+                if (collectionNote != null) collectionNote.Dispose();
+                collectionNote = ShadowLabel.Note(collection.Name + " by " + collection.Owner + ": " + count + (count == 1 ? " mod." : " mods."), width);
+                PackButton(collectionAction, collection, installed);
+                top = new Control[] { heading, note, tools, collectionNote, collectionAction, status };
+            }
             if (Array.IndexOf(top, updateAll) < 0 && updateAll.Parent == list) list.Controls.Remove(updateAll);
+            if (Array.IndexOf(top, collectionAction) < 0 && collectionAction.Parent == list) list.Controls.Remove(collectionAction);
             var cards = new List<Control>();
             var shown = Shown();
             if (pointKey != null)
@@ -347,16 +498,40 @@ namespace ExMoreStuff
                 InGame inGame;
                 installed.TryGetValue(entry.Key, out inGame);
                 bool current = inGame != null && !outdated.Contains(entry.Key);
-                var card = new ModCard(entry.Mod.Name, entry.Mod.Author, entry.Mod.Page, entry.Mod.Downloads.ToString("N0") + " downloads", Where(entry.Mod),
-                                       inGame != null ? string.Join(", ", inGame.Into) : null, inGame != null && !current) { Margin = new Padding(6) };
+                // a skin that changes its fighter's moves too: not installed, and the card says why (user 2026-10-13)
+                string moves = inGame == null ? SkinImport.ChangesMoves(Wanted(entry.Mod).SelectMany(f => f.Contents)) : null;
+                // a new file GameBanana is still checking (user 2026-10-13: an update showed greyed out): the card says so
+                bool checking = moves == null && entry.Mod.Files.Any(f => f.Checking);
+                var card = new ModCard(entry.Mod.Name, entry.Mod.Author, entry.Mod.Page, entry.Mod.Downloads.ToString("N0") + (entry.Mod.Downloads == 1 ? " download" : " downloads"),
+                                       moves != null ? null : Where(entry.Mod), inGame != null ? string.Join(", ", inGame.Into) : null, inGame != null && !current)
+                           { Margin = new Padding(6), Why = moves != null ? "Compatibility issue" : checking ? (inGame != null ? string.Join(", ", inGame.Into) + "   ·   " : "") +
+                                                                                                                  "GameBanana is checking a new file" : null,
+                             WhyDetail = moves != null ? char.ToUpperInvariant(moves[0]) + moves.Substring(1) + " in every costume of that fighter, and online that's a desync. " +
+                                                         "Its model may need them, so as a costume it would crash."
+                                       : checking ? "GameBanana checks every new file for viruses before EX More Stuff offers it.\nIt usually takes a few minutes: press Refresh then." : null };
                 var mod = entry.Mod;
+                GameBanana.Support support;
+                if (GameBanana.Supports.TryGetValue(mod.AuthorId, out support)) card.ShowSupport(support, mod.Author, tips);   // their Ko-fi / Patreon
                 card.Install.Click += async (s, e) => await Install(mod);
+                card.Creator = Creators.Key(mod);
+                card.Heart.On = Creators.IsFavorite(mod);
+                card.Heart.Click += (s, e) => ToggleFavorite(mod, card.Heart);
+                card.AuthorClicked += (s, e) => { quiet = true; search.Text = ""; quiet = false; pick = "creator:" + Creators.Key(mod); Refilter(); list.AutoScrollPosition = Point.Empty; };
+                tips.SetToolTip(card.Page, "Open its page on GameBanana");
                 card.Enable(!working);
+                if (inGame != null)
+                {
+                    var warnings = inGame.Records.Select(r => Weight.InGame(game, r.Item, Weight.Name(r))).Where(w => w != null).ToList();
+                    if (warnings.Count > 0) card.Warning.SetMessage(string.Join("\n", warnings));
+                }
                 cards.Add(card);
                 if (entry.Key == pointKey) pointed = card;
                 var ignored = Thumbnail(entry.Mod.Thumbnail, card);
             }
-            if (shown.Count == 0 && (loaded || entries.Count > 0))
+            if (pick == "packs") cards.AddRange(PackCards(installed));   // the Mod Packs page: a card each
+            else if (shown.Count == 0 && (loaded || entries.Count > 0) && pick == "notifications" && search.Text.Trim() == "")
+                cards.Add(ShadowLabel.Note("Nothing new from your favorite creators in the last 6 months.", width));
+            else if (shown.Count == 0 && (loaded || entries.Count > 0))
                 cards.Add(ShadowLabel.Note(search.Text.Trim() != "" ? "No mods match \"" + search.Text.Trim() + "\"" + (pick != null ? " in " + Picked() : "") + "." : "No mods for " + Picked() + " yet.", width));
             if (shown.Count > shownCount)
             {
@@ -392,10 +567,24 @@ namespace ExMoreStuff
             }
         }
 
+        // pictures a few at a time, a failed one tried twice more a little later (user 2026-10-12: cards stayed black when
+        // GameBanana's picture server dropped some of a whole page's pictures asked for at once)
+        static readonly System.Threading.SemaphoreSlim fetching = new System.Threading.SemaphoreSlim(6);
+
         static async Task<Image> Picture(string url)
         {
-            try { byte[] bytes = await GameBanana.Bytes(url); return await Task.Run(() => Image.FromStream(new MemoryStream(bytes))); }
-            catch (Exception) { return null; }
+            byte[] bytes = null;
+            for (int attempt = 0; bytes == null && attempt < 3; attempt++)
+            {
+                if (attempt > 0) await Task.Delay(attempt * 1500);
+                await fetching.WaitAsync();
+                try { bytes = await GameBanana.Bytes(url); }
+                catch (Exception) { }
+                finally { fetching.Release(); }
+            }
+            if (bytes == null) return null;
+            try { return await Task.Run(() => Pictures.Read(bytes)); }
+            catch (Exception) { return null; }   // not a picture EX More Stuff can read
         }
 
         async Task Thumbnail(string url, ModCard card)
@@ -404,6 +593,8 @@ namespace ExMoreStuff
             Task<Image> image;
             if (!thumbnails.TryGetValue(url, out image)) thumbnails[url] = image = Picture(url);
             Image picture = await image;
+            // not had: asked for again when the cards are next made (a filter, Show more, Refresh, the tab opened again)
+            if (picture == null) { Task<Image> kept; if (thumbnails.TryGetValue(url, out kept) && kept == image) thumbnails.Remove(url); }
             if (card.IsDisposed) return;
             card.Picture = picture;
             card.Invalidate();
@@ -422,9 +613,14 @@ namespace ExMoreStuff
         {
             string blocked = CantInstall();
             if (blocked != null) { Say("Can't install it now: " + blocked, true); return false; }
-            if (!await MakeRoom(mod)) return false;
+            string moves = SkinImport.ChangesMoves(Wanted(mod).SelectMany(f => f.Contents));
+            if (moves != null) { Say(mod.Name + " can't be installed: " + moves + ", for every costume (online that's a desync), and its model may need them", true); return false; }
+            if (BeforeInstall != null) await BeforeInstall();
+            bool isOverride = Overrides.Target(Wanted(mod).SelectMany(f => f.Contents)) != null;   // an override stage: no seat to make room in
+            if (!isOverride && !await MakeRoom(mod)) return false;
             SetWorking(true);
             string g = game, patch = Game.PatchFolder(game), done = null;
+            var before = Weight.Keys(g);
             try
             {
                 var files = Wanted(mod);
@@ -447,57 +643,70 @@ namespace ExMoreStuff
                     }
                     finally { try { File.Delete(download); } catch (Exception) { } }
                 }
-                var costumes = SkinImport.Find(everything);
-                var stageFiles = everything.Where(f => StageFile(f.Key)).ToList();
-                if (costumes.Count == 0 && stageFiles.Count == 0) throw new InvalidDataException("it has no costume or stage files EX More Stuff can use");
-                byte[] picture = null;
-                if (!string.IsNullOrEmpty(mod.Picture)) try { picture = await GameBanana.Bytes(mod.Picture); } catch (Exception) { }
-                var into = new List<string>();
-                bool personal = false, firstModel = false;
-                var records = Installer.Load(g).Concat(Installer.Removed(g)).ToList();
-                foreach (var costume in costumes)
+                // an override stage (override_KOR.txt in it): in its game stage's place on this PC, no code of its own
+                if (Overrides.Target(everything.Select(f => f.Key)) != null)
                 {
-                    string id = "gamebanana:" + mod.Id + ":" + costume.Fighter + costume.Number.ToString("D2");
-                    Installed again = records.FirstOrDefault(r => r.Item.Id == id);
-                    int slot = again != null ? again.Item.Slot : SharedCodes.Slot(mod, costume.Fighter, costume.Number, holders);
-                    if (slot == 0) { slot = SkinImport.FreeSlot(g, costume.Fighter); personal = true; }
-                    if (slot == 0) throw new InvalidOperationException(Fighters.Name(costume.Fighter) + " has no free slot left in " + Catalog.FirstCustomCostume + "-" + Catalog.LastPersonal);
-                    Installed other = records.FirstOrDefault(r => r.Item.IsCostume && r.Item.Fighter == costume.Fighter && r.Item.Slot == slot && r.Item.Id != id);
-                    if (other != null)
-                        throw new InvalidOperationException("your " + Fighters.Name(other.Item.Fighter) + " " + other.Item.TitleNamed(other.Shown ?? other.Item.Name) +
-                                                            " is in the code this skin shares with everyone; give yours another code in Advanced > Package codes first");
-                    string name = Regex.Replace(mod.Name, @"[^\w\s\-\.\(\)]", "").Trim();
-                    string zip = Path.Combine(AppFolders.FighterPackages(costume.Fighter), name + " - " + costume.Fighter + " " + slot.ToString("D2") + ".zip");
-                    var item = new Item
-                    {
-                        Id = id, Type = "costume", Fighter = costume.Fighter, Slot = slot, Code = "", Name = mod.Name, Author = mod.Author, Version = Signature(mod),
-                        Description = mod.Name + " by " + mod.Author + " on GameBanana (" + mod.Page + "): " + costume.Describe +
-                                      (costume.Versions > 1 ? ", its " + costume.Versions + " versions as colors" : ""),
-                        Picture = "", Download = "", Sha256 = "",
-                    };
-                    Say("Putting " + mod.Name + " in as " + Fighters.Name(costume.Fighter) + " " + slot.ToString("D2") + "...");
-                    int s = slot;
-                    await Task.Run(() =>
-                    {
-                        SkinImport.Build(g, costume, s, picture, zip);
-                        Installer.InstallPackage(g, item, zip, "file");
-                    });
-                    into.Add(Fighters.Name(costume.Fighter) + " " + slot.ToString("D2"));
-                    firstModel |= costume.ModelsDiffer;
+                    byte[] shot = null;
+                    if (!string.IsNullOrEmpty(mod.Picture)) try { shot = await GameBanana.Bytes(mod.Picture); } catch (Exception) { }
+                    Say("Putting " + mod.Name + " in...");
+                    string target = await Task.Run(() => Overrides.Install(g, everything, "gamebanana:" + mod.Id + ":override", mod.Name, mod.Author, Signature(mod), shot));
+                    done = mod.Name + " is in: it plays in place of " + Stages.Name(target) + " (only you see it, online too; the Stages page puts the game's own back)";
                 }
-                var problems = new List<string>();
-                if (stageFiles.Count > 0)
+                else
                 {
-                    Action<string> say = text => BeginInvoke((Action)(() => Say(text)));
-                    var result = await Task.Run(() => ModFile.InstallFiles(g, stageFiles, "gamebanana:" + mod.Id, mod.Name, mod.Author, " on GameBanana (" + mod.Page + ")", picture, say, Signature(mod),
-                                                                              code => SharedCodes.StageCode(mod, code)));
-                    into.AddRange(result.Into);
-                    problems.AddRange(result.Problems);
-                    personal |= result.Into.Count > 0 && !result.Shared;
+                    var costumes = SkinImport.Find(everything);
+                    var stageFiles = everything.Where(f => StageFile(f.Key)).ToList();
+                    if (costumes.Count == 0 && stageFiles.Count == 0) throw new InvalidDataException("it has no costume or stage files EX More Stuff can use");
+                    byte[] picture = null;
+                    if (!string.IsNullOrEmpty(mod.Picture)) try { picture = await GameBanana.Bytes(mod.Picture); } catch (Exception) { }
+                    var into = new List<string>();
+                    bool personal = false, firstModel = false;
+                    var records = Installer.Load(g).Concat(Installer.Removed(g)).ToList();
+                    foreach (var costume in costumes)
+                    {
+                        string id = "gamebanana:" + mod.Id + ":" + costume.Fighter + costume.Number.ToString("D2");
+                        Installed again = records.FirstOrDefault(r => r.Item.Id == id);
+                        int slot = again != null ? again.Item.Slot : SharedCodes.Slot(mod, costume.Fighter, costume.Number, holders);
+                        if (slot == 0) { slot = SkinImport.FreeSlot(g, costume.Fighter); personal = true; }
+                        if (slot == 0) throw new InvalidOperationException(SkinImport.NoRoom(costume.Fighter));
+                        Installed other = records.FirstOrDefault(r => r.Item.IsCostume && r.Item.Fighter == costume.Fighter && r.Item.Slot == slot && r.Item.Id != id);
+                        if (other != null)
+                            throw new InvalidOperationException("your " + Fighters.Name(other.Item.Fighter) + " " + other.Item.TitleNamed(other.Shown ?? other.Item.Name) +
+                                                                " is in the code this skin shares with everyone; give yours another code in Advanced > Package codes first");
+                        string name = Regex.Replace(mod.Name, @"[^\w\s\-\.\(\)]", "").Trim();
+                        string zip = Path.Combine(AppFolders.FighterPackages(costume.Fighter), name + " - " + costume.Fighter + " " + slot.ToString("D2") + ".zip");
+                        var item = new Item
+                        {
+                            Id = id, Type = "costume", Fighter = costume.Fighter, Slot = slot, Code = "", Name = mod.Name, Author = mod.Author, Version = Signature(mod),
+                            Description = mod.Name + " by " + mod.Author + " on GameBanana (" + mod.Page + "): " + costume.Describe +
+                                          (costume.Versions > 1 ? ", its " + costume.Versions + " versions as colors" : ""),
+                            Picture = "", Download = "", Sha256 = "",
+                        };
+                        Say("Putting " + mod.Name + " in as " + Fighters.Name(costume.Fighter) + " " + slot.ToString("D2") + "...");
+                        int s = slot;
+                        await Task.Run(() =>
+                        {
+                            SkinImport.Build(g, costume, s, picture ?? new byte[0], zip);   // a GameBanana install: never the mod's own card picture
+                            Installer.InstallPackage(g, item, zip, "file");
+                        });
+                        into.Add(Fighters.Name(costume.Fighter) + " " + slot.ToString("D2"));
+                        firstModel |= costume.ModelsDiffer;
+                    }
+                    var problems = new List<string>();
+                    if (stageFiles.Count > 0)
+                    {
+                        Action<string> say = text => BeginInvoke((Action)(() => Say(text)));
+                        var result = await Task.Run(() => ModFile.InstallFiles(g, stageFiles, "gamebanana:" + mod.Id, mod.Name, mod.Author, " on GameBanana (" + mod.Page + ")", picture, say, Signature(mod),
+                                                                                  code => SharedCodes.StageCode(mod, code)));
+                        into.AddRange(result.Into);
+                        problems.AddRange(result.Problems);
+                        personal |= result.Into.Count > 0 && !result.Shared;
+                    }
+                    if (into.Count == 0) throw new InvalidOperationException(string.Join("; ", problems));
+                    done = mod.Name + " is in: " + string.Join(", ", into) + (personal ? " (only you see " + (into.Count > 1 ? "those" : "it") + ")" : ", the same for everyone who has it") +
+                           (firstModel ? ". Its versions have models of their own; the first one's is used" : "") + (problems.Count > 0 ? ". Not put in: " + string.Join("; ", problems) : "") +
+                           Notes(g, before);
                 }
-                if (into.Count == 0) throw new InvalidOperationException(string.Join("; ", problems));
-                done = mod.Name + " is in: " + string.Join(", ", into) + (personal ? " (only you see " + (into.Count > 1 ? "those" : "it") + ")" : ", the same for everyone who has it") +
-                       (firstModel ? ". Its versions have models of their own; the first one's is used" : "") + (problems.Count > 0 ? ". Not put in: " + string.Join("; ", problems) : "");
             }
             catch (Exception ex) { Say(mod.Name + " wasn't installed: " + ex.Message, true); }
             finally { SetWorking(false); }
@@ -506,7 +715,7 @@ namespace ExMoreStuff
         }
 
         // Before anything downloads: a seat this mod shares with everyone (a costume slot, a stage code) that one of the
-        // player's own packages is in now. The player is asked to move theirs to a free seat (counting down from 84, or
+        // player's own packages is in now. The player is asked to move theirs to a free seat (84 down to 80, then 40 down, then 79 down; or
         // a personal U code for a stage); Package codes' move does it (its zip rewritten, its name kept). False: not installed.
         async Task<bool> MakeRoom(GameBanana.Mod mod)
         {
@@ -543,7 +752,7 @@ namespace ExMoreStuff
             // its name as the player knows it ("Monster Hunter"); without one, its slot or code
             string named = !string.IsNullOrEmpty(other.Shown) ? other.Shown : other.Item.Name;
             string yours = (other.Item.IsStage ? "Stage" : "Costume") + " \"" + (!string.IsNullOrEmpty(named) ? named : other.Item.TitleNamed(null)) + "\"";   // Costume "Monster Hunter"
-            if (target == null) { Say(seat + " is where " + mod.Name + " goes for everyone, and your " + yours + " is there: there's no free seat to move yours to", true); return false; }
+            if (target == null) { Say(seat + " is where " + mod.Name + " goes for everyone, and your " + yours + " is there: there's no free seat to move yours to; uninstall one of yours to make room", true); return false; }
             string problem = CodeChange.Problem(game, other, code, slot);
             if (problem != null) { Say(seat + " is where " + mod.Name + " goes for everyone, and your " + yours + " is there; it can't move: " + problem, true); return false; }
             if (MessageBox.Show(FindForm(), seat + " is where " + mod.Name + " goes for everyone. Your " + yours + " is there now.\n\nMove yours to " + target + " and install?",
@@ -592,7 +801,239 @@ namespace ExMoreStuff
                 (failed.Count > 0 ? "; not updated: " + string.Join(", ", failed) : "") + (left > 0 && failed.Count == 0 ? "; " + left + " still to update" : ""), failed.Count > 0);
         }
 
-        string Picked() { return pick == "stages" ? "stages" : pick == "updates" ? "updates" : ExMoreStuff.Fighters.Name(pick); }
+        // A pack's button (its card's, and above its mods; user 2026-10-14): "Install pack" when none of its mods is in;
+        // "UPDATE" over "N New Mods" (purple) when some are and others aren't, or have an update; "All installed" (greyed)
+        // when there's nothing to get; "Stop" while it installs
+        void PackButton(FlatButton button, GameBanana.Collection pack, Dictionary<string, InGame> installed)
+        {
+            var members = entries.Where(e => pack.Mods.Contains(e.Mod.Id)).ToList();
+            var missing = members.Where(e => !installed.ContainsKey(e.Key)).ToList();
+            var todo = missing.Concat(members.Where(e => outdated.Contains(e.Key))).ToList();
+            bool anyIn = missing.Count < members.Count, going = collectionChain && chainPack == pack.Id;
+            button.Sub = null;
+            button.Fill = null;
+            button.Primary = true;
+            if (going) button.Text = stopChain ? "Stopping..." : "Stop";
+            else if (!anyIn) button.Text = "Install pack";
+            else if (todo.Count > 0) { button.Text = "UPDATE"; button.Sub = todo.Count + (todo.Count == 1 ? " New Mod" : " New Mods"); button.Fill = Theme.Update; }
+            else { button.Text = "All installed"; button.Primary = false; }
+            button.Enabled = going || (!chaining && todo.Count > 0);
+            button.Size = new Size(Math.Max(TextRenderer.MeasureText(button.Text, button.Font).Width, button.Sub != null ? TextRenderer.MeasureText(button.Sub, Theme.Font(8.5f)).Width : 0) + 36,
+                                   button.Sub != null ? 44 : 36);
+            tips.SetToolTip(button, anyIn && todo.Count > 0 && !going ? "New in this pack or updated: " + string.Join(", ", todo.Select(e => e.Mod.Name)) : null);
+            button.Invalidate();
+        }
+
+        // The Mod Packs page: a card per pack whose mods are on the list, its picture its 4 newest mods' (PackCard)
+        List<Control> PackCards(Dictionary<string, InGame> installed)
+        {
+            var cards = new List<Control>();
+            foreach (var pack in GameBanana.Collections)
+            {
+                var members = entries.Where(e => pack.Mods.Contains(e.Mod.Id)).ToList();
+                if (members.Count == 0) continue;
+                var p = pack;
+                var card = new PackCard(pack.Name, pack.Owner, members.Count) { Margin = new Padding(6) };
+                card.Page.Page = pack.Page;
+                tips.SetToolTip(card.Page, "Open its page on GameBanana");
+                PackButton(card.Action, pack, installed);
+                card.Action.Location = new Point(12, card.Height - card.Action.Height - 12);
+                card.Action.Click += async (s, e) => await InstallCollection(p);
+                card.Opened += (s, e) => { pick = "collection:" + p.Id; Refilter(); list.AutoScrollPosition = Point.Empty; };   // its mods
+                // its maker: a favorite with the heart, their mods with the gold name, as on a mod card (one of the pack's is theirs)
+                var theirs = members[0].Mod;
+                card.Heart.On = Creators.IsFavorite(theirs);
+                card.Heart.Click += (s, e) => ToggleFavorite(theirs, card.Heart);
+                card.OwnerClicked += (s, e) => { quiet = true; search.Text = ""; quiet = false; pick = "creator:" + Creators.Key(theirs); Refilter(); list.AutoScrollPosition = Point.Empty; };
+                GameBanana.Support support;
+                if (GameBanana.Supports.TryGetValue(pack.OwnerId, out support)) card.ShowSupport(support, pack.Owner, tips);
+                var ignored = PackPicture(members.OrderByDescending(e => e.Date).Take(4).Select(e => e.Mod.Thumbnail).ToList(), card);
+                cards.Add(card);
+            }
+            return cards;
+        }
+
+        // a pack card's picture: its 4 newest mods' pictures, two by two, a yellow cross between them (user 2026-10-14)
+        async Task PackPicture(List<string> urls, PackCard card)
+        {
+            var pictures = new List<Image>();
+            foreach (string url in urls)
+            {
+                if (string.IsNullOrEmpty(url)) { pictures.Add(null); continue; }
+                Task<Image> image;
+                if (!thumbnails.TryGetValue(url, out image)) thumbnails[url] = image = Picture(url);
+                pictures.Add(await image);
+            }
+            if (card.IsDisposed) return;
+            int w = card.Width - 3, h = 140;
+            var whole = new Bitmap(w, h);
+            using (Graphics g = Graphics.FromImage(whole))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.Clear(Theme.Well);
+                for (int i = 0; i < 4; i++)
+                {
+                    var cell = new RectangleF(i % 2 * w / 2f, i / 2 * h / 2f, w / 2f, h / 2f);
+                    Image picture = i < pictures.Count ? pictures[i] : null;
+                    if (picture != null) Theme.Fit(g, picture, cell, false);
+                }
+                using (var yellow = new SolidBrush(Theme.Accent))
+                {
+                    g.FillRectangle(yellow, w / 2f - 1.5f, 0, 3, h);
+                    g.FillRectangle(yellow, 0, h / 2f - 1.5f, w, 3);
+                }
+            }
+            if (card.Picture != null) card.Picture.Dispose();
+            card.Picture = whole;
+            card.Invalidate();
+        }
+
+        // Install pack / UPDATE (user 2026-10-14: "install all, queue them like update"): a pack's mods not in yet and those
+        // with an update, one at a time as Update all does (2 seconds apart); pressed again (Stop), it ends after the one going
+        bool collectionChain;
+        long chainPack;   // the pack being installed
+        async Task InstallCollection(GameBanana.Collection collection)
+        {
+            if (chaining) { if (collectionChain) { stopChain = true; Fill(); } return; }
+            if (collection == null) return;
+            chainPack = collection.Id;
+            var installed = Installed();
+            var todo = entries.Where(e => collection.Mods.Contains(e.Mod.Id) && (!installed.ContainsKey(e.Key) || outdated.Contains(e.Key))).Select(e => e.Mod).ToList();
+            if (todo.Count == 0) return;
+            chaining = collectionChain = true;
+            stopChain = false;
+            SetWorking(true);
+            Fill();
+            int done = 0;
+            var failed = new List<string>();
+            for (int i = 0; i < todo.Count && !stopChain; i++)
+            {
+                Say("Installing " + (i + 1) + " of " + todo.Count + ": " + todo[i].Name + "...");
+                if (await Install(todo[i])) done++; else failed.Add(todo[i].Name);
+                if (stopChain || i == todo.Count - 1) break;
+                await Task.Delay(2000);
+            }
+            chaining = collectionChain = false;
+            stopChain = false;
+            SetWorking(false);
+            Fill();
+            Say("Installed " + done + " of " + todo.Count + (failed.Count > 0 ? "; not installed: " + string.Join(", ", failed) : ""), failed.Count > 0);
+        }
+
+        string Picked()
+        {
+            return pick == "stages" ? "stages" : pick == "updates" ? "updates" : pick == CreatorPicker.FavoritesKey ? "your favorite creators" :
+                   pick == "notifications" ? "Notifications" : CreatorPicked ? CreatorName(pick.Substring(8)) :
+                   pick == "packs" ? "Mod Packs" : CollectionPicked ? (PickedCollection != null ? PickedCollection.Name : "this pack") : ExMoreStuff.Fighters.Name(pick);
+        }
+
+        // a creator's name, by key (the latest the list has)
+        string CreatorName(string key)
+        {
+            return entries.Where(e => Creators.Key(e.Mod) == key).Select(e => e.Mod.Author).FirstOrDefault(n => !string.IsNullOrEmpty(n)) ?? "a creator";
+        }
+
+        /// <summary>The page from the start (its tab clicked): every mod, no filter or search, scrolled to the top.</summary>
+        public void ShowAll()
+        {
+            pick = null;
+            quiet = true;
+            search.Text = "";
+            quiet = false;
+            if (!loaded) return;   // it shows once the list is in
+            Refilter();
+            list.AutoScrollPosition = Point.Empty;
+        }
+
+        /// <summary>One creator's mods, favorite or not (their gold name clicked on a costume or stage card; user
+        /// 2026-10-12): by a mod of theirs, or their name when it isn't listed.</summary>
+        public void ShowCreatorOf(long modId, string author)
+        {
+            quiet = true;
+            search.Text = "";
+            quiet = false;
+            if (!loaded) { creatorOf = Tuple.Create(modId, author); if (!loading) { var ignored = Load(); } return; }   // it shows once the list is in
+            PickCreator(modId, author);
+            Refilter();
+            list.AutoScrollPosition = Point.Empty;
+        }
+
+        void PickCreator(long modId, string author)
+        {
+            GameBanana.Mod mod = entries.Select(e => e.Mod).FirstOrDefault(m => m.Id == modId) ??
+                                 entries.Select(e => e.Mod).FirstOrDefault(m => string.Equals(m.Author, author, StringComparison.OrdinalIgnoreCase)) ??
+                                 new GameBanana.Mod { Author = author };
+            pick = "creator:" + Creators.Key(mod);
+        }
+
+        /// <summary>Opens Notifications: new mods from the favorite creators (the tab's heart goes).</summary>
+        public void ShowNotifications()
+        {
+            pick = "notifications";
+            if (!loaded && !loading) { var ignored = Load(); return; }   // it shows once the list is in
+            Refilter();
+        }
+
+        // the Creators list: Favorites, then the favorite creators, then everyone else alphabetically, with their mods
+        CreatorPicker CreatorList()
+        {
+            var rows = entries.GroupBy(e => Creators.Key(e.Mod)).Select(g => new CreatorPicker.Row
+            {
+                Key = g.Key, Count = g.Count(), Favorite = Creators.IsFavorite(g.First().Mod),
+                Name = g.Select(e => e.Mod.Author).FirstOrDefault(n => !string.IsNullOrEmpty(n)) ?? "?",
+                Picture = g.Select(e => e.Mod.AuthorPicture).FirstOrDefault(OwnPicture),
+            }).OrderBy(r => r.Favorite ? 0 : 1).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            var picker = new CreatorPicker(rows, entries.Count(e => Creators.IsFavorite(e.Mod)))
+            {
+                Selected = pick == CreatorPicker.FavoritesKey ? pick : CreatorPicked ? pick.Substring(8) : null,
+            };
+            var waiting = new HashSet<string>();
+            picker.Picture = address =>
+            {
+                Task<Image> image;
+                if (!thumbnails.TryGetValue(address, out image)) thumbnails[address] = image = Picture(address);
+                if (image.IsCompleted) return image.Status == TaskStatus.RanToCompletion ? image.Result : null;
+                if (waiting.Add(address)) image.ContinueWith(t => { try { if (!picker.IsDisposed) picker.BeginInvoke((Action)picker.Invalidate); } catch (Exception) { } });
+                return null;
+            };
+            picker.Hearted = row =>
+            {
+                var first = entries.FirstOrDefault(e => Creators.Key(e.Mod) == row.Key);
+                if (first == null) return row.Favorite;
+                bool on = Creators.Toggle(first.Mod);
+                FavoriteChanged(row.Key, on);
+                return on;
+            };
+            picker.HeartedAt += (row, area) => Toast.ShowAbove(picker, area, row.Favorite ? "Favorited this creator" : "Removed from favorites", this);
+            return picker;
+        }
+
+        // a creator's own profile picture: not GameBanana's default (near black) or the one for banned accounts
+        static bool OwnPicture(string address)
+        {
+            return !string.IsNullOrEmpty(address) && address.IndexOf("/defaults/avatar", StringComparison.OrdinalIgnoreCase) < 0 &&
+                   address.IndexOf("/av/banned", StringComparison.OrdinalIgnoreCase) < 0;
+        }
+
+        // a card's heart: the creator a favorite or not, said in a small message above that heart
+        void ToggleFavorite(GameBanana.Mod mod, HeartButton heart)
+        {
+            bool on = Creators.Toggle(mod);
+            Toast.ShowAbove(heart, heart.ClientRectangle, on ? "Favorited this creator" : "Removed from favorites", this);
+            FavoriteChanged(Creators.Key(mod), on);
+        }
+
+        // every card of that creator shows it; Favorites and Notifications are shown again (their mods come or go)
+        /// <summary>A creator made a favorite (or not) elsewhere (a costume card's heart): this page follows.</summary>
+        public void CreatorChanged(GameBanana.Mod mod, bool on) { FavoriteChanged(Creators.Key(mod), on); }
+
+        void FavoriteChanged(string key, bool on)
+        {
+            foreach (ModCard card in list.Controls.OfType<ModCard>().Where(c => c.Creator == key)) card.Heart.On = on;
+            Recount();
+            if (pick == CreatorPicker.FavoritesKey || pick == "notifications") Fill();
+            else if (heading != null) LayOutTop(topWidth);
+        }
 
         /// <summary>Installs a mod file (Advanced > Add Mod From File for anything that isn't an EX More Stuff package, or
         /// a file dropped here): a GameBanana file points to its card (its shared code), anything else goes in as it is,
@@ -602,8 +1043,10 @@ namespace ExMoreStuff
         {
             string blocked = CantInstall();
             if (blocked != null) { Say("Can't install it now: " + blocked, true); return "can't install it now: " + blocked; }
+            if (BeforeInstall != null) await BeforeInstall();
             SetWorking(true);
             string g = game, done = null, problem = null;
+            var before = Weight.Keys(g);
             try
             {
                 string md5 = await Task.Run(() => ModFile.Md5(path));
@@ -617,16 +1060,29 @@ namespace ExMoreStuff
                     Say("That file is " + same.Name + " from GameBanana: " + (installed ? "it's already installed" : "press Install on its card (below) so it goes in its shared code"));
                     return problem;
                 }
-                Action<string> say = text => BeginInvoke((Action)(() => Say(text)));
+                Action<string> say = text => BeginInvoke((Action)(() => { Say(text); if (Progress != null) Progress(text); }));
                 var result = await Task.Run(() => ModFile.Install(g, path, null, null, "", null, null, say));
                 if (result.Into.Count == 0) throw new InvalidOperationException(string.Join("; ", result.Problems));
                 done = ModFile.NameFrom(path) + " is in: " + string.Join(", ", result.Into) + " (only you see it)" +
-                       (result.Problems.Count > 0 ? ". Not put in: " + string.Join("; ", result.Problems) : "");
+                       (result.Problems.Count > 0 ? ". Not put in: " + string.Join("; ", result.Problems) : "") + Notes(g, before);
             }
             catch (Exception ex) { problem = ex.Message; Say("It wasn't installed: " + ex.Message, true); }
             finally { SetWorking(false); }
             Finished(done);
+            LastDone = done;
             return problem;
+        }
+
+        // Add Mod From File (the window, from whatever tab it's on: user 2026-10-14, it used to switch to Browse Mods): the
+        // install's progress, and what it put in (LastDone), for the window's status line
+        public Action<string> Progress;
+        public string LastDone { get; private set; }
+
+        // the size warnings for what an install put in (Weight), as the end of its message: they inform, nothing is stopped
+        static string Notes(string game, ICollection<string> before)
+        {
+            var notes = Weight.New(game, before);
+            return notes.Count > 0 ? ". Note: " + string.Join(" ", notes) : "";
         }
 
         void Finished(string done)
@@ -660,19 +1116,69 @@ namespace ExMoreStuff
         {
             status.Text = text;
             status.ForeColor = problem ? Theme.Warning : Theme.Text;
+            if (problem) BugReport.Noted(text);
         }
     }
 
-    // One mod on the Browse Mods tab: its picture, name, maker (in gold, opening its page), downloads, where it goes, and
-    // Install; once it's in, where it went and "Installed", or Update when its GameBanana files have changed since.
+    // One mod on the Browse Mods tab: its picture, name, maker (in gold, showing their mods), downloads, where it goes,
+    // Install and a tiny blue icon opening its page; once it's in, where it went and "Installed", or Update when its
+    // GameBanana files have changed since.
     class ModCard : Clear
     {
         public Image Picture;
         readonly string title, extra, goes, into;
         readonly bool outdated;
         public readonly FlatButton Install;
+        public readonly HeartButton Heart = new HeartButton();
+        public readonly WarningMark Warning = new WarningMark();   // a size warning for what it put in (Weight)
+        public readonly PageButton Page = new PageButton();   // its page on GameBanana
+        public string Creator;   // Creators.Key of its mod
+        public string Why;       // why it can't be installed, in place of where it goes: "Compatibility issue" (user 2026-10-13)
+        public string WhyDetail; // the reason, shown while the pointer is on that line
+        // the card's own (made the first time it's needed), gone with it: a shared one kept pointing at a card the list
+        // had thrown away (Refresh making the cards again under the pointer) and the program stopped with "Cannot access
+        // a disposed object" (user 2026-10-14)
+        ToolTip whyTip;
+        bool whyShown;
+        Rectangle WhyArea { get { return new Rectangle(12, 210, Width - 24, 22); } }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            bool over = Why != null && WhyDetail != null && WhyArea.Contains(e.Location);
+            if (over == whyShown) return;
+            whyShown = over;
+            if (whyTip == null) whyTip = new ToolTip();
+            if (over) whyTip.Show(WhyDetail, this, WhyArea.Left, WhyArea.Bottom + 4); else whyTip.Hide(this);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (whyShown) { whyShown = false; whyTip.Hide(this); }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && whyTip != null) { whyTip.Dispose(); whyTip = null; }
+            base.Dispose(disposing);
+        }
+        public event EventHandler AuthorClicked;   // the creator's gold name: their mods are shown
         readonly GoldName author;
         int flash;
+
+        /// <summary>The creator's Ko-fi and Patreon (GameBanana.Supports), left of the page icon (user 2026-10-14).</summary>
+        public void ShowSupport(GameBanana.Support support, string creator, ToolTip tips)
+        {
+            int right = Page.Left - 2;
+            foreach (var button in SupportButton.For(support))
+            {
+                button.Location = new Point(right - button.Width, Page.Top);
+                right = button.Left - 2;
+                tips.SetToolTip(button, "Support " + creator + " on " + (button.Kofi ? "Ko-fi" : "Patreon"));
+                Controls.Add(button);
+            }
+        }
 
         public ModCard(string title, string authorName, string page, string extra, string goes, string into, bool outdated)
         {
@@ -682,14 +1188,24 @@ namespace ExMoreStuff
             this.goes = goes;
             this.into = into;
             Size = new Size(286, 292);
-            author = new GoldName(string.IsNullOrEmpty(authorName) ? "its maker" : authorName) { Link = page };
+            Warning.Location = new Point(Width - 38, 12);
+            Controls.Add(Warning);
+            author = new GoldName(string.IsNullOrEmpty(authorName) ? "its maker" : authorName);
+            author.Click += (s, e) => { var handler = AuthorClicked; if (handler != null) handler(this, e); };
             int by = TextRenderer.MeasureText("by ", Theme.Font(9f)).Width - 4;
-            author.Location = new Point(12 + by, 181);
-            author.Width = Math.Min(author.Width, Width - 24 - by - 40);
+            // between "by" and the gold name: the heart that makes the creator a favorite (or not)
+            Heart.Location = new Point(12 + by - 2, 182);
+            Controls.Add(Heart);
+            author.Location = new Point(Heart.Right + 1, 181);
+            author.Width = Math.Min(author.Width, Width - 24 - by - 62);
             Controls.Add(author);
             Install = new FlatButton(into == null ? "Install" : outdated ? "Update" : "Installed", into == null || outdated);
+            if (into != null && outdated) Install.Fill = Theme.Update;   // purple, as the tab's update dot (user 2026-10-13)
             Install.Location = new Point(12, Height - Install.Height - 12);
             Controls.Add(Install);
+            Page.Page = page;
+            Page.Location = new Point(Width - 12 - Page.Width, Install.Top + (Install.Height - Page.Height) / 2);
+            Controls.Add(Page);
         }
 
         public void Enable(bool on)
@@ -725,9 +1241,100 @@ namespace ExMoreStuff
             Theme.Draw(g, "by", Theme.Font(9f), Theme.Muted, new Rectangle(12, 182, 30, 22), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             if (extra != "")
                 Theme.Draw(g, "·   " + extra, Theme.Font(8.5f), Theme.Muted, new Rectangle(author.Right + 6, 182, Width - author.Right - 18, 22), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-            string where = into != null ? "In: " + into : goes != null ? "Goes in: " + goes : "Nothing EX More Stuff can install";
-            Theme.Draw(g, where, Theme.Font(9f), into != null ? Theme.GoodText : goes != null ? Theme.Text : Theme.Muted, new Rectangle(12, 210, Width - 24, 34),
+            string where = Why ?? into ?? goes ?? "Nothing EX More Stuff can install";   // just whose it is (user: no "Goes in"); a reason first
+            Theme.Draw(g, where, Theme.Font(9f), Why != null ? Theme.Warning : into != null ? Theme.GoodText : goes != null ? Theme.Text : Theme.Muted, new Rectangle(12, 210, Width - 24, 34),
                        TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
+        }
+    }
+    // A Mod Pack on the Mod Packs page (user 2026-10-14: "each pack gets its own card"): its 4 newest mods' pictures as one
+    // (CommunityPanel.PackPicture), its name, "by" its maker in gold and how many mods; its button (Install pack, UPDATE,
+    // All installed) at the bottom left, its GameBanana page and its maker's Ko-fi / Patreon at the bottom right. A click on
+    // the picture or the name shows its mods (Opened).
+    class PackCard : Clear
+    {
+        public Image Picture;
+        public readonly FlatButton Action = new FlatButton("Install pack", true);
+        public readonly PageButton Page = new PageButton();
+        public readonly HeartButton Heart = new HeartButton();   // its maker a favorite, as on mod cards (user 2026-10-14: "the card is missing the heart")
+        public event EventHandler Opened, OwnerClicked;           // the picture or name: its mods; the gold name: its maker's mods
+        readonly string title, count;
+        readonly GoldName owner;
+        bool hover;
+
+        public PackCard(string name, string ownerName, int mods)
+        {
+            title = name;
+            count = mods + (mods == 1 ? " mod" : " mods");
+            Size = new Size(286, 292);
+            // "by", the heart, the maker's name in gold: as a mod card has them
+            Heart.Location = new Point(12 + TextRenderer.MeasureText("by ", Theme.Font(9f)).Width - 4 - 2, 182);
+            Controls.Add(Heart);
+            owner = new GoldName(string.IsNullOrEmpty(ownerName) ? "its maker" : ownerName) { Location = new Point(Heart.Right + 1, 181) };
+            owner.Width = Math.Min(owner.Width, Width - 24 - owner.Left - 60);
+            owner.Click += (s, e) => { var handler = OwnerClicked; if (handler != null) handler(this, e); };
+            Controls.Add(owner);
+            Action.Location = new Point(12, Height - Action.Height - 12);
+            Controls.Add(Action);
+            Page.Location = new Point(Width - 12 - Page.Width, Height - 12 - 36 + (36 - Page.Height) / 2);
+            Controls.Add(Page);
+        }
+
+        /// <summary>Its maker's Ko-fi and Patreon, left of the page icon.</summary>
+        public void ShowSupport(GameBanana.Support support, string creator, ToolTip tips)
+        {
+            int right = Page.Left - 2;
+            foreach (var button in SupportButton.For(support))
+            {
+                button.Location = new Point(right - button.Width, Page.Top);
+                right = button.Left - 2;
+                tips.SetToolTip(button, "Support " + creator + " on " + (button.Kofi ? "Ko-fi" : "Patreon"));
+                Controls.Add(button);
+            }
+        }
+
+        bool OnOpener(Point p) { return p.Y < 180; }   // the picture and the name
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            bool over = OnOpener(e.Location);
+            Cursor = over ? Cursors.Hand : Cursors.Default;
+            if (over != hover) { hover = over; Invalidate(); }
+        }
+
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (hover) { hover = false; Invalidate(); } }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            base.OnMouseClick(e);
+            if (OnOpener(e.Location)) { var handler = Opened; if (handler != null) handler(this, e); }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && Picture != null) { Picture.Dispose(); Picture = null; }
+            base.Dispose(disposing);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            Smooth(g);
+            using (var path = Theme.Rounded(new RectangleF(1, 1, Width - 3, Height - 3), 10))
+            {
+                using (var fill = new SolidBrush(Theme.Card)) g.FillPath(fill, path);
+                g.SetClip(path);
+                var picture = new RectangleF(1, 1, Width - 3, 140);
+                using (var well = new SolidBrush(Theme.Well)) g.FillRectangle(well, picture);
+                if (Picture != null) g.DrawImage(Picture, picture);
+                g.ResetClip();
+                using (var pen = new Pen(hover ? Theme.AccentHover : Theme.Line)) g.DrawPath(pen, path);
+            }
+            Theme.Draw(g, title, Theme.Bold(10f), hover ? Theme.AccentHover : Theme.Text, new Rectangle(12, 146, Width - 24, 38),
+                       TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis);
+            Theme.Draw(g, "by", Theme.Font(9f), Theme.Muted, new Rectangle(12, 182, 30, 22), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            Theme.Draw(g, "·   " + count, Theme.Font(8.5f), Theme.Muted, new Rectangle(owner.Right + 6, 182, Width - owner.Right - 18, 22),
+                       TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
     }
 }

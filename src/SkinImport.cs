@@ -21,6 +21,20 @@ namespace ExMoreStuff
         public static readonly Regex CostumeFile = new Regex(@"^([A-Za-z]{3})_(\d\d)(?:_(\d\d))?\.(obj\.emo|nml\.emb|shd\.emo|bsr|csb|col\.emb|obj\.emm)$", RegexOptions.IgnoreCase);
         static readonly Regex PictureFile = new Regex(@"^([A-Za-z]{3})_(\d\d)(?:_(\d\d))?\.png$", RegexOptions.IgnoreCase);
         static readonly string[] Parts = { ".obj.emo", ".nml.emb", ".shd.emo", ".bsr", ".csb" };
+        // a fighter's move files: a mod that changes them changes the fighter in every costume (online too: a desync), and
+        // its model may need them (Juri gótica crashed without hers, user 2026-10-13: "dont install and why")
+        static readonly Regex MovesFile = new Regex(@"^([A-Za-z]{3})\.(bac|bcm)$", RegexOptions.IgnoreCase);
+
+        /// <summary>Why a mod with these files can't go in as costumes: "it changes Juri's moves too"; null when it doesn't.</summary>
+        public static string ChangesMoves(IEnumerable<string> paths)
+        {
+            var fighters = paths.Select(p => MovesFile.Match(p.Substring(p.LastIndexOf('/') + 1))).Where(m => m.Success)
+                .Select(m => m.Groups[1].Value.ToUpperInvariant()).Where(Fighters.IsCode).Distinct().ToList();
+            return fighters.Count == 0 ? null : "it changes " + string.Join(" and ", fighters.Select(f => Fighters.Name(f) + "'s")) + " moves too";
+        }
+
+        // a fighter's voice (<F>_E.csb English, <F>_J.csb Japanese; its foley is in them too), or one costume's (<F>_NN_E.csb)
+        static readonly Regex VoiceFile = new Regex(@"^([A-Za-z]{3})(?:_(\d\d))?_(E|J)\.csb$", RegexOptions.IgnoreCase);
 
         public sealed class Color
         {
@@ -37,12 +51,18 @@ namespace ExMoreStuff
             public readonly Dictionary<string, byte[]> Parts = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);   // by ending: ".obj.emo" ...
             public readonly Color[] Colors = new Color[10];          // colors 1-10; null: the game's
             public readonly Dictionary<string, byte[]> Pictures = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);   // "" or "_01".."_10": its own pictures
+            public readonly Dictionary<string, byte[]> Voices = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);     // "_E", "_J": the voice it came with
             public int Versions;                                     // versions that became colors
             public bool ModelsDiffer;                                // versions with models of their own: the first one's is used
             public bool OwnCode { get { return Number >= Catalog.FirstCustomCostume; } }
             public string Describe
             {
-                get { int own = Colors.Count(c => c != null); return Fighters.Name(Fighter) + (Parts.ContainsKey(".obj.emo") ? ", new model" : "") + (own > 0 ? ", " + own + " color" + (own > 1 ? "s" : "") + " of its own" : ""); }
+                get
+                {
+                    int own = Colors.Count(c => c != null);
+                    return Fighters.Name(Fighter) + (Parts.ContainsKey(".obj.emo") ? ", new model" : "") + (own > 0 ? ", " + own + " color" + (own > 1 ? "s" : "") + " of its own" : "") +
+                           (Voices.Count > 0 ? ", its own voice" : "");
+                }
             }
         }
 
@@ -94,7 +114,25 @@ namespace ExMoreStuff
                 // a costume needs a model or at least one color of its own
                 if (c.Parts.ContainsKey(".obj.emo") || own.Count > 0) costumes.Add(c);
             }
+            // voice files that came with them: part of the costume, as their creator meant (user 2026-10-13), kept under its
+            // own name (<F>_80_E.csb) so the fighter's other costumes keep the game's voice; EMBER plays it with that costume
+            // (to come). One named for a costume (<F>_NN_E.csb) goes with that costume only, and wins over the fighter's.
+            var voices = files.Select(f => new { f.Value, Match = VoiceFile.Match(f.Key.Substring(f.Key.LastIndexOf('/') + 1)) }).Where(v => v.Match.Success)
+                .OrderBy(v => v.Match.Groups[2].Success ? 0 : 1).ToList();
+            foreach (Costume c in costumes)
+                foreach (var v in voices.Where(v => v.Match.Groups[1].Value.ToUpperInvariant() == c.Fighter && (!v.Match.Groups[2].Success || int.Parse(v.Match.Groups[2].Value) == c.Number)))
+                {
+                    string language = "_" + v.Match.Groups[3].Value.ToUpperInvariant();
+                    if (!c.Voices.ContainsKey(language)) c.Voices[language] = v.Value;
+                }
             return costumes;
+        }
+
+        // two colors' materials the same: both their own and byte for byte the same, or both the game's for the same color
+        static bool SameMaterial(Color a, Color b)
+        {
+            if (a.Emm == null || b.Emm == null) return a.Emm == null && b.Emm == null && a.From == b.From;
+            return a.Emm.Length == b.Emm.Length && a.Emm.SequenceEqual(b.Emm);
         }
 
         /// <summary>The costumes a mod holds, from the names in its files alone (fighter and costume, nothing read).</summary>
@@ -115,43 +153,27 @@ namespace ExMoreStuff
             return null;
         }
 
-        /// <summary>A free seat for a skin without a shared one, counting down from 84 (GameBanana's seats are claimed from 8 up): none of
-        /// GameBanana's mods holds it, and nothing of this PC's uses it: no package of EX More Stuff's (in the game or
-        /// switched off) and no files of it in the game folder. 0 when all are taken.</summary>
+        /// <summary>A free seat for a skin without a shared one: the personal seats 84 down to 80, then 40 down to 8, then 79
+        /// down to 41 (Catalog.OverflowFrom); none of GameBanana's mods holds it, and nothing of this PC's uses it: no package
+        /// of EX More Stuff's (in the game or switched off) and no files of it in the game folder. 0 when all are taken.</summary>
+        /// <summary>What to say when a fighter has no free slot left (user 2026-10-12: the player makes room by uninstalling).</summary>
+        public static string NoRoom(string fighter)
+        {
+            return Fighters.Name(fighter) + " has no free slot left: uninstall one of " + Fighters.Name(fighter) + "'s costumes to make room";
+        }
+
         public static int FreeSlot(string game, string fighter)
         {
-            var taken = new HashSet<int>(Installer.Load(game).Concat(Installer.Removed(game)).Where(r => r.Item.IsCostume && r.Item.Fighter == fighter).Select(r => r.Item.Slot));
-            // the personal seats first (84 down to 80), then the shared ones from 79 down
+            var taken = new HashSet<int>(Installer.Load(game).Concat(Installer.Removed(game)).Concat(Docked.Load()).Where(r => r.Item.IsCostume && r.Item.Fighter == fighter).Select(r => r.Item.Slot));
+            // the personal seats first (84 down to 80); past them the middle of the shared ones, 40 down, then from the top,
+            // 79 down (user 2026-10-12: they upload their own GameBanana mods from 79 down, the community fills from 8 up)
             var order = Enumerable.Range(Catalog.FirstPersonal, Catalog.LastPersonal - Catalog.FirstPersonal + 1).Reverse()
-                .Concat(Enumerable.Range(Catalog.FirstCustomCostume, Catalog.LastShared - Catalog.FirstCustomCostume + 1).Reverse());
+                .Concat(Enumerable.Range(Catalog.FirstCustomCostume, Catalog.OverflowFrom - Catalog.FirstCustomCostume + 1).Reverse())
+                .Concat(Enumerable.Range(Catalog.OverflowFrom + 1, Catalog.LastShared - Catalog.OverflowFrom).Reverse());
             foreach (int slot in order)
                 if (!taken.Contains(slot) && !SharedCodes.Held.Contains(SharedCodes.Code(fighter, slot)) && !File.Exists(Path.Combine(Game.PatchFolder(game), "battle", "chara", fighter, fighter + "_" + slot.ToString("D2") + ".obj.emo")))
                     return slot;
             return 0;
-        }
-
-        static byte[] unfinished;
-
-        /// <summary>Ember's picture for a color a mod doesn't bring: "Unfinished mod" in white on black, the size of
-        /// Ember's own color pictures (256 × 384).</summary>
-        public static byte[] Unfinished
-        {
-            get
-            {
-                if (unfinished != null) return unfinished;
-                using (var bitmap = new Bitmap(256, 384, PixelFormat.Format24bppRgb))
-                using (var g = Graphics.FromImage(bitmap))
-                using (var font = new Font("Segoe UI Semibold", 36f, GraphicsUnit.Pixel))
-                using (var centered = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                using (var png = new MemoryStream())
-                {
-                    g.Clear(System.Drawing.Color.Black);
-                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                    g.DrawString("Unfinished\nmod", font, Brushes.White, new RectangleF(0, 0, 256, 384), centered);
-                    bitmap.Save(png, ImageFormat.Png);
-                    return unfinished = png.ToArray();
-                }
-            }
         }
 
         /// <summary>Writes the package for `costume` in `slot` to `zipPath`: the skin's parts and colors where it has
@@ -168,6 +190,18 @@ namespace ExMoreStuff
                 if (needed) throw new FileNotFoundException("the game's own " + from + suffix + " isn't there to complete the costume");
                 return null;
             };
+            // a model with many more bones than the game's costume it's built on, and no physics (.bsr) of its own for them:
+            // the game crashes on it (Juri gótica: 361 bones on her Original's 252, user 2026-10-13). One with its own
+            // physics is fine (the SFxT ports: Cammy X Lili's 302 on Cammy's 224).
+            byte[] model;
+            if (costume.Parts.TryGetValue(".obj.emo", out model) && !costume.Parts.ContainsKey(".bsr"))
+            {
+                string under = GameFile(game, costume.Fighter, from + ".obj.emo");
+                int bones = Weight.Bones(model), theirs = under == null ? 0 : Weight.Bones(File.ReadAllBytes(under));
+                if (theirs > 0 && bones > theirs * 1.1)
+                    throw new InvalidDataException("its model has " + bones + " bones and no physics (.bsr) of its own for them, against the " + theirs + " of " +
+                                                   Fighters.Name(costume.Fighter) + "'s " + CostumeGrid.CostumeName(number) + ": the game would crash on it");
+            }
             var package = new List<KeyValuePair<string, byte[]>>();
             foreach (string part in Parts)
             {
@@ -175,30 +209,59 @@ namespace ExMoreStuff
                 if (!costume.Parts.TryGetValue(part, out data) && part != ".csb") data = fromGame(part, part == ".obj.emo" || part == ".nml.emb");
                 if (data != null) package.Add(new KeyValuePair<string, byte[]>(to + part, data));
             }
-            // A color the mod doesn't bring, when it brings some, is the game's, made for the game's model: its picture in
-            // Ember says so. (A mod with no colors at all is made for the game's, so they need no picture.)
-            bool bringsColors = costume.Colors.Any(c => c != null);
+            // its voice, unless it's only a copy of the game's own (Juri gótica brings the game's JRI_E/J.csb, 9 MB that change nothing)
+            foreach (var voice in costume.Voices)
+            {
+                string own = GameFile(game, costume.Fighter, costume.Fighter + voice.Key + ".csb");
+                if (own != null && new FileInfo(own).Length == voice.Value.Length && File.ReadAllBytes(own).SequenceEqual(voice.Value)) continue;
+                package.Add(new KeyValuePair<string, byte[]>(to + voice.Key + ".csb", voice.Value));
+            }
+            // A color the mod doesn't bring, when it brings some, and one it brings that looks the same as an earlier one (a
+            // copy, as color 1 is of a skin's only color, or a change nobody would see), is a ready-made pattern
+            // (ColorVariants): the first such color pattern 1, the next pattern 2 ..., with the material of the mod's
+            // first color and the pattern's picture for Ember's gallery, so no two colors look alike and every PC gets the
+            // same (user 2026-10-11). (A mod with no colors at all is made for the game's, so those stay.)
+            var brought = new List<int>();
+            var redone = new HashSet<int>();
+            var looks = new Dictionary<int, List<byte[]>>();
+            for (int i = 0; i < 10; i++)
+            {
+                if (costume.Colors[i] == null) continue;
+                var look = ColorVariants.Look(costume.Colors[i].Col);
+                // a copy only with the same material too: a color's material tints what its textures' alpha masks
+                Color mine = costume.Colors[i];
+                if (brought.Any(k => SameMaterial(costume.Colors[k], mine) && ColorVariants.LookSame(looks[k], look))) { redone.Add(i); continue; }
+                looks[i] = look;
+                brought.Add(i);
+            }
+            var missing = Enumerable.Range(0, 10).Where(i => !brought.Contains(i)).ToList();
+            var madePictures = new HashSet<string>(redone.Select(i => "_" + (i + 1).ToString("D2")), StringComparer.OrdinalIgnoreCase);
+            Color first = brought.Count > 0 ? costume.Colors[brought[0]] : null;
             for (int color = 1; color <= 10; color++)
             {
-                Color own = costume.Colors[color - 1];
+                Color own = brought.Contains(color - 1) ? costume.Colors[color - 1] : null;
                 string suffix = "_" + color.ToString("D2");
-                package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".col.emb", own != null ? own.Col : fromGame(suffix + ".col.emb", true)));
-                package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".obj.emm", own != null ? own.Emm ?? fromGame("_" + own.From.ToString("D2") + ".obj.emm", true) : fromGame(suffix + ".obj.emm", true)));
-                if (own == null && bringsColors && !costume.Pictures.ContainsKey(suffix))
-                    package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".png", Unfinished));
-            }
-            foreach (var p in costume.Pictures) package.Add(new KeyValuePair<string, byte[]>(to + p.Key + ".png", p.Value));
-            if (!costume.Pictures.ContainsKey("") && picture != null)
-                try
+                if (own != null || first == null)
                 {
-                    using (var image = Image.FromStream(new MemoryStream(picture)))
-                    using (var png = new MemoryStream())
-                    {
-                        image.Save(png, ImageFormat.Png);
-                        package.Add(new KeyValuePair<string, byte[]>(to + ".png", png.ToArray()));
-                    }
+                    package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".col.emb", own != null ? own.Col : fromGame(suffix + ".col.emb", true)));
+                    package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".obj.emm", own != null ? own.Emm ?? fromGame("_" + own.From.ToString("D2") + ".obj.emm", true) : fromGame(suffix + ".obj.emm", true)));
+                    continue;
                 }
-                catch (Exception) { }   // a picture that won't read: the costume goes in without one
+                int pattern = missing.IndexOf(color - 1) + 1;
+                package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".col.emb", ColorVariants.Patterned(first.Col, pattern)));
+                package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".obj.emm", first.Emm ?? fromGame("_" + first.From.ToString("D2") + ".obj.emm", true)));
+                if (costume.Pictures.ContainsKey(suffix) && !madePictures.Contains(suffix)) continue;
+                package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".png", ColorVariants.PatternPicture(pattern)));
+            }
+            // the costume's own picture: the mod page's (`picture`, a GameBanana install: "thumbnail = the mod page's
+            // picture", user 2026-10-09), never one in the mod's files, which may be older (user 2026-10-12: Seth's card
+            // showed a render from before its upload; 2026-10-13: "just use the game banana picture ... card image in the
+            // file, its not needed"), even when the page's won't read or couldn't be had (an empty `picture`). Its colors'
+            // always stay.
+            byte[] page = Pictures.Png(picture);
+            foreach (var p in costume.Pictures.Where(p => !madePictures.Contains(p.Key) && !(p.Key == "" && picture != null)))
+                package.Add(new KeyValuePair<string, byte[]>(to + p.Key + ".png", p.Value));
+            if (page != null) package.Add(new KeyValuePair<string, byte[]>(to + ".png", page));
             string temp = zipPath + ".tmp";
             Directory.CreateDirectory(Path.GetDirectoryName(zipPath));
             using (ZipArchive zip = ZipFile.Open(temp, ZipArchiveMode.Create))

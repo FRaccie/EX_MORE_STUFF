@@ -50,16 +50,31 @@ namespace ExMoreStuff
 
         readonly ShadowLabel slotLabel, stageLabel;
 
+        const int RowHeight = 44;
+
         void LayOutRows()
         {
-            int line = ShadowLabel.LineHeight, y = (costumeRow.Height - line) / 2 + 2;
+            int line = ShadowLabel.LineHeight, y = (RowHeight - line) / 2 + 2;
             foreach (ShadowLabel label in new[] { slotLabel, stageLabel }) label.Width = TextRenderer.MeasureText(label.Text, label.Font).Width + 8;
             slotLabel.Location = new Point(character.Right + 18, y);
-            slot.Location = new Point(slotLabel.Right + 2, (costumeRow.Height - slot.Height) / 2);
-            slotAnswer.Bounds = new Rectangle(slot.Right + 14, y, Math.Max(10, costumeRow.Width - slot.Right - 14), line);
+            slot.Location = new Point(slotLabel.Right + 2, (RowHeight - slot.Height) / 2);
+            slotAnswer.Bounds = new Rectangle(slot.Right + 14, y, Math.Max(10, costumeRow.Width - slot.Right - 14), slotAnswer.Height);
             stageLabel.Location = new Point(0, y);
-            stage.Location = new Point(stageLabel.Right + 2, (stageRow.Height - stage.Height) / 2);
-            stageAnswer.Bounds = new Rectangle(stage.Right + 14, y, Math.Max(10, stageRow.Width - stage.Right - 14), line);
+            stage.Location = new Point(stageLabel.Right + 2, (RowHeight - stage.Height) / 2);
+            stageAnswer.Bounds = new Rectangle(stage.Right + 14, y, Math.Max(10, stageRow.Width - stage.Right - 14), stageAnswer.Height);
+            FitAnswer(slotAnswer, costumeRow);
+            FitAnswer(stageAnswer, stageRow);
+        }
+
+        // an answer too long for its line (a mod's long name) goes on two, its row taller (it was cut off: "you can still u...")
+        static void FitAnswer(ShadowLabel label, Clear row)
+        {
+            int line = ShadowLabel.LineHeight;
+            bool two = TextRenderer.MeasureText(label.Text, label.Font).Width + 4 > label.Width;
+            label.Wrap = two;
+            label.Height = two ? 2 * line : line;
+            label.Invalidate();
+            row.Height = two ? RowHeight + line : RowHeight;   // a change lays the rows out again (Resize)
         }
 
         protected override void OnVisibleChanged(EventArgs e)
@@ -133,6 +148,8 @@ namespace ExMoreStuff
             grid.Invalidate();
             Tell(slotAnswer, a);
             Tell(stageAnswer, stage.Text.Length == 3 ? Seats.Stage(stage.Text) : null);
+            FitAnswer(slotAnswer, costumeRow);
+            FitAnswer(stageAnswer, stageRow);
         }
 
         static void Tell(ShadowLabel label, Seats.Answer a)

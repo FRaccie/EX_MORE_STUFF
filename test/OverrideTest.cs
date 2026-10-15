@@ -1,0 +1,94 @@
+// Override stages (Overrides.cs): a mod with override_<CODE>.txt goes in its game stage's place, no code of its own:
+// its zip in Mods\Stages (the stage under the target's code, converted when it came under another), listed, and in
+// the stage's place right away (a Replacement "override:<id>"); installing it again updates it; the Stages page can put
+// the game's own back and pick it again; Add Mod From File's path (ModFile.InstallFiles) does the same.
+// Usage: OverrideTest <real game folder> <scratch folder>   (copies of the real Training Stage)
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Text;
+
+namespace ExMoreStuff
+{
+    static class OverrideTest
+    {
+        static int failures;
+
+        static void Check(bool ok, string what) { Console.WriteLine((ok ? "  ok   " : "  FAIL ") + what); if (!ok) failures++; }
+
+        static string[] Names(byte[] file) { return GameArt.ReadContainer(GameArt.Unpack(file)).Select(e => e.Key).ToArray(); }
+
+        static void Main(string[] args)
+        {
+            string real = args[0], scratch = args[1];
+            if (Directory.Exists(scratch)) Directory.Delete(scratch, true);
+            string game = Path.Combine(scratch, "game");
+            Directory.CreateDirectory(Path.Combine(game, "resource", "battle", "stage"));
+            File.WriteAllBytes(Path.Combine(game, "SSFIV.exe"), new byte[0]);
+            AppFolders.Root = Path.Combine(scratch, "program");
+            Func<string, byte[]> trn = suffix => File.ReadAllBytes(Path.Combine(real, "resource", "battle", "stage", "STG_TRN" + suffix));
+
+            Console.WriteLine("Which stage it replaces");
+            Check(Overrides.Target(new[] { "pack/readme.txt", "pack/sub/override_kor.txt" }) == "KOR", "override_kor.txt in a folder: KOR");
+            Check(Overrides.Target(new[] { "override_XYZ.txt" }) == null && Overrides.Target(new[] { "STG_KOR.emz" }) == null, "not one of the game's stages, or no marker: none");
+
+            Console.WriteLine("Installing one made under another code (Training Stage's files, for Festival at the Old Temple)");
+            var mod = new List<KeyValuePair<string, byte[]>>
+            {
+                new KeyValuePair<string, byte[]>("pack/STG_TRN.emz", trn(".emz")),
+                new KeyValuePair<string, byte[]>("pack/STG_TRN.tex.emz", trn(".tex.emz")),
+                new KeyValuePair<string, byte[]>("pack/override_KOR.txt", Encoding.ASCII.GetBytes("no NPCs")),
+                new KeyValuePair<string, byte[]>("pack/readme.txt", Encoding.ASCII.GetBytes("hi")),
+            };
+            byte[] shot;   // its page's picture: a real one (one that can't be read is left out)
+            using (var picture = new System.Drawing.Bitmap(8, 8))
+            using (var png = new MemoryStream()) { picture.Save(png, System.Drawing.Imaging.ImageFormat.Png); shot = png.ToArray(); }
+            string target = Overrides.Install(game, mod, "gamebanana:1:override", "Quiet Temple", "oops", "v1", shot);
+            var list = Overrides.Load(game);
+            Check(target == "KOR" && list.Count == 1 && list[0].Name == "Quiet Temple" && list[0].Target == "KOR", "listed: Quiet Temple, in place of KOR");
+            string zip = list[0].Package;
+            Check(zip.StartsWith(AppFolders.StagePackages) && Path.GetFileName(zip) == "Quiet Temple - replaces KOR.zip", "its zip in Mods\\Stages: " + Path.GetFileName(zip));
+            using (ZipArchive archive = ZipFile.OpenRead(zip))
+            {
+                var names = archive.Entries.Select(e => e.Name).OrderBy(n => n).ToArray();
+                Check(names.SequenceEqual(new[] { "override_KOR.txt", "STG_KOR.emz", "STG_KOR.png", "STG_KOR.tex.emz" }), "it holds STG_KOR, its marker and picture, nothing else: " + string.Join(", ", names));
+            }
+            byte[] inZip = Overrides.StageBytes(game, "override:gamebanana:1:override", ".emz");
+            Check(Names(inZip).Any(n => n.StartsWith("KOR_")) && !Names(inZip).Any(n => n.StartsWith("TRN_")), "converted: TRN_ entries now KOR_");
+            var replaced = Replacements.Load(game);
+            string patchFile = Path.Combine(Game.PatchFolder(game), "battle", "stage", "STG_KOR.emz");
+            Check(replaced.Count == 1 && replaced[0].Stage == "KOR" && replaced[0].Source == "override:gamebanana:1:override" && File.Exists(patchFile),
+                  "in Festival at the Old Temple's place right away");
+            Check(GameArt.Unpack(File.ReadAllBytes(patchFile)).SequenceEqual(GameArt.Unpack(inZip)), "the game gets its files as they are in the zip");
+
+            Console.WriteLine("Again (an update)");
+            Overrides.Install(game, mod, "gamebanana:1:override", "Quiet Temple", "oops", "v2", null);
+            list = Overrides.Load(game);
+            Check(list.Count == 1 && list[0].Version == "v2" && list[0].Package == zip && Replacements.Load(game).Single().Source == "override:gamebanana:1:override",
+                  "one entry, its zip updated in place, still in KOR's place");
+
+            Console.WriteLine("The Stages page");
+            Check(Replacements.Restore(game, "KOR") == null && !File.Exists(patchFile) && Overrides.Load(game).Count == 1, "the game's own back: the override stays listed");
+            Check(Replacements.Problem(game, "KOR", "override:gamebanana:1:override", s => s) == null, "it can be picked again");
+            Replacements.Replace(game, "KOR", "override:gamebanana:1:override");
+            Check(File.Exists(patchFile), "picked again: in KOR's place");
+            Replacements.Restore(game, "KOR");
+
+            Console.WriteLine("Add Mod From File's path");
+            var result = ModFile.InstallFiles(game, mod, "file:abc", "From A File", null, "", null, s => { });
+            Check(result.Into.SequenceEqual(new[] { "in place of Festival at the Old Temple" }) && Overrides.Load(game).Count == 2 &&
+                  Replacements.Load(game).Single().Source == "override:file:abc:override", "it goes in as an override too: " + string.Join(", ", result.Into));
+
+            Console.WriteLine("Problems");
+            var two = new List<KeyValuePair<string, byte[]>>(mod) { new KeyValuePair<string, byte[]>("pack/STG_DET.emz", trn(".emz")), new KeyValuePair<string, byte[]>("pack/STG_DET.tex.emz", trn(".tex.emz")) };
+            string problem = null;
+            try { Overrides.Install(game, two, "x", "Two", null, null, null); } catch (InvalidDataException ex) { problem = ex.Message; }
+            Check(problem == "it has more than one stage and none named STG_KOR", "two stages, neither named for KOR: " + problem);
+
+            Console.WriteLine(failures == 0 ? "All passed" : failures + " failed");
+            Environment.Exit(failures == 0 ? 0 : 1);
+        }
+    }
+}

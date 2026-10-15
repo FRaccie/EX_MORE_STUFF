@@ -106,10 +106,18 @@ namespace ExMoreStuff
 
             Console.WriteLine("Delete");
             navy = Installer.Load(game).Single(r => r.Item.Key == "color:RYU:1:35");
-            Check(PackagesPanel.RecyclesZip(game, navy) && PackagesPanel.DeleteQuestion(game, navy, "Navy").Contains("goes to the Recycle Bin"), "its zip would go to the Recycle Bin");
+            Check(PackagesPanel.RecyclesZip(game, navy), "EX More Stuff's copy of its zip goes to the Recycle Bin with it");
+            Check(PackagesPanel.DeleteQuestion(game, navy).EndsWith("\n\nThe original mod file you added is untouched."), "the question says the file added stays");
+            navy.Theirs = true;
+            Check(!PackagesPanel.RecyclesZip(game, navy), "a zip that's the player's own file (picked inside Mods) is never recycled");
+            navy.Theirs = false;
             string movedZip = Path.Combine(args[1], "moved.zip");
             File.Move(zip, movedZip);
-            Check(!PackagesPanel.RecyclesZip(game, navy) && PackagesPanel.DeleteQuestion(game, navy, "Navy").Contains("isn't where it was"), "a moved zip is left alone, and the question says so");
+            Check(!PackagesPanel.RecyclesZip(game, navy), "a moved zip is left alone");
+            string navyId = navy.Item.Id;
+            navy.Item.Id = "gamebanana:123:RYU0135";
+            Check(PackagesPanel.DeleteQuestion(game, navy).EndsWith("\n\nYou can download it again from Browse Mods."), "a download: it can be downloaded again");
+            navy.Item.Id = navyId;
             PackagesPanel.PurgeForGood(game, navy);
             Check(!File.Exists(Path.Combine(ryu, "RYU_01_35.col.emb")) && !File.Exists(Path.Combine(ryu, "RYU_01_35.txt")) &&
                   !Installer.Load(game).Any(r => r.Item.Key == "color:RYU:1:35") && File.Exists(movedZip), "out of the game (its name file too) and off the list; the moved zip kept");

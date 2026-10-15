@@ -1,0 +1,153 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Web.Script.Serialization;
+
+namespace ExMoreStuff
+{
+    // Override stages (user 2026-10-12: "a new type of stage download, one that doesn't go to its own code ... an
+    // override stage"): a stage made to play in one game stage's place, released without a code of its own, so it adds no
+    // entry to EMBER's stage list. Its mod says which stage with a file named override_<CODE>.txt (override_KOR.txt; what's
+    // in it doesn't matter), so Browse Mods knows before downloading. EX More Stuff keeps it as a zip of its own in
+    // Mods\Stages and, once it's in, plays it in that stage's place right away (user): a Replacement whose source is
+    // "override:<id>", as the Stages page's replacements are made. Only this PC sees it, online too; the stage's music stays.
+    // The Stages page puts the game's own back or picks another any time. Their list: ex_more_stuff_overrides.json in the
+    // patch folder, beside the other lists.
+    class Override
+    {
+        public string Id, Name, Author, Version, Target, Package;
+    }
+
+    static class Overrides
+    {
+        const string ListName = "ex_more_stuff_overrides.json";
+        public const string Prefix = "override:";
+        static readonly Regex Marker = new Regex(@"^override_([A-Za-z0-9]{3})\.txt$", RegexOptions.IgnoreCase);
+        static readonly Regex StageFile = new Regex(@"^STG_([A-Za-z0-9]{3})(\.tex)?\.emz$", RegexOptions.IgnoreCase);
+
+        static string ListPath(string game) { return Path.Combine(Game.PatchFolder(game), ListName); }
+
+        static string Name(string path) { return path.Substring(Math.Max(path.LastIndexOf('/'), path.LastIndexOf('\\')) + 1); }
+
+        /// <summary>The game stage a mod's file names say it replaces (override_KOR.txt anywhere in it: one of the game's
+        /// stages), or null.</summary>
+        public static string Target(IEnumerable<string> paths)
+        {
+            foreach (string path in paths)
+            {
+                Match m = Marker.Match(Name(path));
+                if (m.Success && Array.IndexOf(Stages.Codes, m.Groups[1].Value.ToUpperInvariant()) >= 0) return m.Groups[1].Value.ToUpperInvariant();
+            }
+            return null;
+        }
+
+        public static bool IsOverride(string source) { return source != null && source.StartsWith(Prefix, StringComparison.Ordinal); }
+
+        public static List<Override> Load(string game)
+        {
+            try
+            {
+                if (!Game.IsGameFolder(game) || !File.Exists(ListPath(game))) return new List<Override>();
+                return new JavaScriptSerializer().Deserialize<List<Override>>(File.ReadAllText(ListPath(game))) ?? new List<Override>();
+            }
+            catch (Exception) { return new List<Override>(); }
+        }
+
+        static void Save(string game, List<Override> list)
+        {
+            if (list.Count == 0) { if (File.Exists(ListPath(game))) File.Delete(ListPath(game)); return; }
+            Directory.CreateDirectory(Game.PatchFolder(game));
+            File.WriteAllText(ListPath(game), new JavaScriptSerializer().Serialize(list));
+        }
+
+        /// <summary>The override a replacement's source names ("override:<id>"), or null.</summary>
+        public static Override Find(string game, string source)
+        {
+            return IsOverride(source) ? Load(game).FirstOrDefault(o => Prefix + o.Id == source) : null;
+        }
+
+        /// <summary>Installs an override from a mod's files (Browse Mods, Add Mod From File): its stage (named for its
+        /// target, else the one stage in the mod; under another code it's converted) as STG_<target> in a zip of its own
+        /// in Mods\Stages with the marker and a picture, listed, and in its stage's place right away. Installing the same
+        /// id again updates it. Returns the target.</summary>
+        public static string Install(string game, IList<KeyValuePair<string, byte[]>> files, string id, string name, string author, string version, byte[] picture)
+        {
+            if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
+            string target = Target(files.Select(f => f.Key));
+            if (target == null) throw new InvalidDataException("it has no override_<stage>.txt naming one of the game's stages");
+            var stages = files.Select(f => new { File = f, Match = StageFile.Match(Name(f.Key)) }).Where(x => x.Match.Success)
+                .GroupBy(x => x.Match.Groups[1].Value.ToUpperInvariant()).ToList();
+            var stage = stages.FirstOrDefault(g => g.Key == target) ?? (stages.Count == 1 ? stages[0] : null);
+            if (stage == null)
+                throw new InvalidDataException(stages.Count == 0 ? "it has no stage files (STG_" + target + ".emz)" : "it has more than one stage and none named STG_" + target);
+            byte[] model = stage.Where(x => !x.Match.Groups[2].Success).Select(x => x.File.Value).FirstOrDefault();
+            byte[] textures = stage.Where(x => x.Match.Groups[2].Success).Select(x => x.File.Value).FirstOrDefault();
+            if (model == null || textures == null) throw new InvalidDataException("it needs both STG_" + stage.Key + ".emz and STG_" + stage.Key + ".tex.emz");
+            if (stage.Key != target) { model = StagePack.Recode(model, stage.Key, target); textures = StagePack.Recode(textures, stage.Key, target); }
+
+            var list = Load(game);
+            Override old = list.FirstOrDefault(o => o.Id == id);
+            string folder = AppFolders.StagePackages;
+            Directory.CreateDirectory(folder);
+            string clean = Regex.Replace(name ?? "", @"[^\w\s\-\.\(\)]", "").Trim();
+            string zip = old != null && !string.IsNullOrEmpty(old.Package) ? old.Package
+                       : AppFolders.PlaceFor(folder, (clean.Length > 0 ? clean : "Override") + " - replaces " + target + ".zip", null);
+            string temp = zip + ".making";
+            using (ZipArchive archive = ZipFile.Open(temp, ZipArchiveMode.Create))
+            {
+                Action<string, byte[]> add = (entry, data) => { using (Stream s = archive.CreateEntry(entry).Open()) s.Write(data, 0, data.Length); };
+                add("STG_" + target + ".emz", model);
+                add("STG_" + target + ".tex.emz", textures);
+                add("override_" + target + ".txt", Encoding.UTF8.GetBytes((name ?? "") + "\r\nPlays in place of " + Stages.Name(target) + " (" + target + ") on this PC: an override stage.\r\n"));
+                byte[] png = Pictures.Png(picture);   // a WebP one made readable (Pictures)
+                if (png != null) add("STG_" + target + ".png", png);
+            }
+            if (File.Exists(zip)) File.Delete(zip);
+            File.Move(temp, zip);
+
+            list.RemoveAll(o => o.Id == id);
+            list.Add(new Override { Id = id, Name = name, Author = author, Version = version, Target = target, Package = zip });
+            Save(game, list);
+            // in its stage's place right away (user): whatever played there before goes first
+            if (Replacements.Load(game).Any(r => r.Stage == target)) Replacements.Restore(game, target);
+            Replacements.Replace(game, target, Prefix + id);
+            return target;
+        }
+
+        /// <summary>An override's stage file for Replacements (".emz" or ".tex.emz", under its target's code), or null.</summary>
+        public static byte[] StageBytes(string game, string source, string suffix)
+        {
+            Override o = Find(game, source);
+            if (o == null || !File.Exists(o.Package)) return null;
+            using (ZipArchive archive = ZipFile.OpenRead(o.Package))
+            {
+                ZipArchiveEntry entry = archive.Entries.FirstOrDefault(e => string.Equals(e.Name, "STG_" + o.Target + suffix, StringComparison.OrdinalIgnoreCase));
+                if (entry == null) return null;
+                using (Stream s = entry.Open())
+                using (var data = new MemoryStream()) { s.CopyTo(data); return data.ToArray(); }
+            }
+        }
+
+        /// <summary>An override's picture (STG_<target>.png in its zip), or null.</summary>
+        public static byte[] Picture(string game, string source)
+        {
+            Override o = Find(game, source);
+            if (o == null || !File.Exists(o.Package)) return null;
+            try
+            {
+                using (ZipArchive archive = ZipFile.OpenRead(o.Package))
+                {
+                    ZipArchiveEntry entry = archive.Entries.FirstOrDefault(e => e.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase));
+                    if (entry == null) return null;
+                    using (Stream s = entry.Open())
+                    using (var data = new MemoryStream()) { s.CopyTo(data); return data.ToArray(); }
+                }
+            }
+            catch (Exception) { return null; }
+        }
+    }
+}

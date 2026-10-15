@@ -62,7 +62,18 @@ namespace ExMoreStuff
             Check(Installer.Removed(game).Count == 0 && Installer.Load(game).Count == 0, "forget takes it off the list");
 
             Check(Installer.CleanName("Monster_Hunter-2.0") == "Monster_Hunter-2.0", "English letters, digits, spaces and _ - . stay");
-            Check(Installer.CleanName("Café Ryu's #1!") == "Caf Ryus 1" && Installer.CleanName("A & B") == "A B", "anything else is dropped, spaces collapse");
+            Check(Installer.CleanName("Café Ryu's #1!") == "Cafe Ryus 1" && Installer.CleanName("A & B") == "A B", "an accented letter becomes its plain one, anything else is dropped, spaces collapse");
+            Check(Installer.CleanName("Juri gótica") == "Juri gotica", "Juri gótica: Juri gotica (it was Juri gtica)");
+            DateTime? built = BugReport.Built();
+            Check(built != null && Math.Abs((built.Value - System.IO.File.GetLastWriteTime(typeof(BugReport).Assembly.Location)).TotalMinutes) < 5,
+                  "this copy's build date read from its header: " + built);
+            var day = new DateTime(2026, 10, 13);
+            Check(!BugReport.TooOld(day, day.AddYears(2).AddDays(-1)) && BugReport.TooOld(day, day.AddYears(2).AddDays(1)) && !BugReport.TooOld(null, day.AddYears(10)),
+                  "Report a bug: shown until 2 years after the build, hidden after; shown when the build date can't be read");
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            Check(BugReport.Scrub("its zip isn't at " + profile + "\\Downloads\\mod.zip any more") == "its zip isn't at %USERPROFILE%\\Downloads\\mod.zip any more" &&
+                  BugReport.Scrub("not at D:\\Users\\Someone Else\\Mods\\x.zip; or X:/Users/name/y.zip") == "not at D:\\Users\\(user)\\Mods\\x.zip; or X:/Users/(user)/y.zip" &&
+                  BugReport.Scrub("X:\\Games\\SF4 MODDING\\EXMS\\Mods") == "X:\\Games\\SF4 MODDING\\EXMS\\Mods", "a bug report's error message: no user names in its folders, other folders as they are");
             Check(Installer.CleanName("日本語 \U0001F600") == "", "a name of only other characters is no name");
             Check(Installer.CleanName(new string('a', 45)) == new string('a', 40), "names are cut to 40 characters");
 

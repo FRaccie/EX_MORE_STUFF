@@ -16,6 +16,8 @@ echo -resource:res\logo.png,logo.png>> out\resources.rsp
 echo -resource:res\wordmark.png,wordmark.png>> out\resources.rsp
 rem Tom's Round BGM mod (dinput8.dll), put next to SSFIV.exe with round 2/3 music (src\RoundMod.cs)
 echo -resource:res\roundbgm\dinput8.dll,roundbgm.dll>> out\resources.rsp
+rem the performance test's helper (a dinput8.dll too), next to SSFIV.exe only while a test runs (src\PerfTest.cs; helper\build_helper.bat)
+echo -resource:res\helper\dinput8.dll,helper.dll>> out\resources.rsp
 rem GameBanana's list as of this version, for when GameBanana can't be reached (test\GameBananaSnapshot.cs refreshes it)
 echo -resource:res\gamebanana.json,gamebanana.json>> out\resources.rsp
 rem GameBanana's codes kept for good as of this version (the codes branch's codes.json), for when GitHub can't be reached
@@ -25,11 +27,13 @@ rem the game's costumes in every color (SF4 Ember's selection art, made small by
 echo -resource:res\costumes\index.txt,costumes.index.txt>> out\resources.rsp
 rem the game's official update files (paths and sizes), so Advanced > Old mods can tell mods apart (test\OfficialManifest.cs)
 echo -resource:res\official.json,official.json>> out\resources.rsp
+rem ready-made patterns for the colors a skin doesn't bring (test\MakePatterns.cs)
+(for %%f in (res\patterns\*.dds res\patterns\*.png) do @echo -resource:res\patterns\%%~nxf,patterns.%%~nxf) >> out\resources.rsp
 "%CSC%" -nologo -target:winexe -platform:anycpu -optimize+ -langversion:7.3 -out:out\%OUT% ^
   -win32icon:src\app.ico -win32manifest:src\app.manifest ^
   -r:"%FW%\System.dll" -r:"%FW%\System.Core.dll" -r:"%FW%\System.Drawing.dll" -r:"%FW%\System.Windows.Forms.dll" ^
   -r:"%FW%\System.IO.Compression.dll" -r:"%FW%\System.IO.Compression.FileSystem.dll" -r:"%FW%\System.Net.Http.dll" ^
-  -r:"%FW%\System.Web.Extensions.dll" -r:"%FW%\Microsoft.VisualBasic.dll" ^
+  -r:"%FW%\System.Web.Extensions.dll" -r:"%FW%\Microsoft.VisualBasic.dll" -r:"%FW%\WPF\PresentationCore.dll" -r:"%FW%\WPF\WindowsBase.dll" -r:"%FW%\System.Xaml.dll" ^
   @out\resources.rsp src\*.cs
 set RESULT=%ERRORLEVEL%
 del out\resources.rsp

@@ -81,7 +81,7 @@ namespace ExMoreStuff
             Check(Installer.PackageHolds(stageZip, now.Item) && !Installer.PackageHolds(stageZip, stage), "the zip holds E07 now, not D05");
             Replacements.Replace(game, "TRN", "E07");
             Check(Replacements.Load(game).Single().Source == "E07" && File.Exists(Path.Combine(patch, @"battle\stage\STG_TRN.emz")), "Training Stage plays as E07");
-            Check(PackagesPanel.DeleteQuestion(game, now, "Over Pipe").Contains(Stages.Name("TRN") + ", which plays as it now, gets its own stage back"), "the question says so");
+            Check(PackagesPanel.DeleteQuestion(game, now).Contains(Stages.Name("TRN") + ", which plays as it now, gets its own stage back"), "the question says so");
             string left = PackagesPanel.PurgeForGood(game, now);
             Check(left == null && Installer.Load(game).Count == 0 && Installer.Removed(game).Count == 0, "deleted: off both lists");
             Check(Replacements.Load(game).Count == 0 && !File.Exists(Path.Combine(patch, @"battle\stage\STG_TRN.emz")), "Training Stage has its own stage back");

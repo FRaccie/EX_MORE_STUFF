@@ -71,6 +71,14 @@ namespace ExMoreStuff
             Check(note != null && File.ReadAllText(Path.Combine(patch, "STG_DET.tex.emz")) == "a newer edit", "kept: " + note);
             Check(File.ReadAllText(edit) == "the player's own Pit Stop 109 edit", "the untouched file's backup came back");
 
+            Console.WriteLine("A docked stage's files in Training Stage's place (the stage preview)");
+            File.Delete(Path.Combine(patch, "STG_DET.tex.emz"));
+            var docked = StagePack.Suffixes.ToDictionary(s => s, s => File.ReadAllBytes(Path.Combine(resource, "STG_DET" + s)));
+            Replacements.ReplaceWith(game, "TRN", "docked", "DET", docked);
+            Check(GameArt.Unpack(File.ReadAllBytes(trn)).SequenceEqual(GameArt.Unpack(StagePack.Recode(docked[".emz"], "DET", "TRN"))), "its files, renamed DET_ -> TRN_");
+            Check(Replacements.Load(game).Any(r => r.Stage == "TRN" && r.Source == "docked"), "listed as docked");
+            Check(Replacements.Restore(game, "TRN") == null && !File.Exists(trn), "and taken back out");
+
             Console.WriteLine("Beautiful Bay");
             Directory.Delete(game, true);
             Directory.CreateDirectory(Path.Combine(game, "resource", "battle", "stage"));

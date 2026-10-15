@@ -89,6 +89,8 @@ namespace ExMoreStuff
         // Costume slots: 8-79 GameBanana's shared seats; 80-84 kept for players' own mods (5 per fighter: not shared, so
         // a mod added from a file never meets a GameBanana upload there); 85-99 not free.
         public const int FirstCustomCostume = 8, LastShared = 79, FirstPersonal = 80, LastPersonal = 84, LastSlot = 99;
+        // past the personal seats, a player's own mods go 40 down to 8, then 79 down to 41 (SkinImport.FreeSlot)
+        public const int OverflowFrom = 40;
         // New colors of any costume: 30-99 (after the game's own, which go up to 22). Not shared: any free number.
         public const int FirstCustomColor = 30, LastColor = 99;
 

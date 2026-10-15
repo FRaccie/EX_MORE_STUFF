@@ -11,7 +11,7 @@ namespace ExMoreStuff
     //  - Newer mods come in a code of their own (their files are BLK_23 ...): it's theirs, read from GameBanana's list of
     //    what's in each file. If two use the same code, the one uploaded first keeps it.
     // Slots 85-99 aren't shared seats: a mod made in one of them gets none. Everything without a shared seat goes in a
-    // free seat on the player's PC, counting down from 84 (seats are claimed from 8 up): only that player sees it.
+    // free seat on the player's PC (84 down to 80, then 40 down, then 79 down: SkinImport.FreeSlot): only that player sees it.
     static class SharedCodes
     {
         // GameBanana mod -> its code (given 2026-10-09; never change one, players have them installed)

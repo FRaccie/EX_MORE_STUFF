@@ -70,7 +70,7 @@ namespace ExMoreStuff
             Console.WriteLine("Deleting Ryu 12 gives Alternate 4 back");
             Installer.InstallPackage(game, new Item { Id = "x", Type = "costume", Fighter = "RYU", Slot = 12, Name = "Twelve" }, MakePackage(args[1], chara), "file");
             Installed twelve = Installer.Load(game).Single();
-            Check(PackagesPanel.DeleteQuestion(game, twelve, "Ryu 12").Contains("Alternate 4, which plays as it now, gets its own costume back"), "the question says so");
+            Check(PackagesPanel.DeleteQuestion(game, twelve).Contains("Alternate 4, which plays as it now, gets its own costume back"), "the question says so");
             PackagesPanel.PurgeForGood(game, twelve);
             Check(CostumeSwaps.Load(game).Count == 0 && !File.Exists(Path.Combine(chara, "RYU_05.obj.emo")) && !File.Exists(Path.Combine(chara, "RYU_12.obj.emo")),
                   "Alternate 4 has its own files back, Ryu 12 is gone");

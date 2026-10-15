@@ -118,13 +118,20 @@ namespace ExMoreStuff
             Installer.InstallPackage(game, own, d05, "file");
             string patchFolder = Path.Combine(game, "patch_ae2_tu3");
             Check(File.Exists(Path.Combine(patchFolder, @"battle\stage\STG_D05.emz")) && File.Exists(Path.Combine(patchFolder, @"battle\sound\bgm\BGM_D05.csb")), "stage in battle\\stage, music in battle\\sound\\bgm");
-            // a song can't go over a custom stage's own music: removing or updating the stage would take it
+            // a song may go over a custom stage's own music (the Music page warns first); updating or removing the stage
+            // takes it off again, and the package's own file goes back in or out with the rest
             var d05Music = new MusicSlot { Code = "D05" };
-            bool refused = false;
-            try { MusicBank.Install(game, d05Music, new byte[] { 1 }, new InstalledSong()); } catch (InvalidOperationException) { refused = true; }
-            Check(MusicBank.PackageOwning(game, d05Music) != null && refused &&
-                  new FileInfo(Path.Combine(patchFolder, @"battle\sound\bgm\BGM_D05.csb")).Length > 1, "the Music page won't put a song over a stage package's music");
+            string d05Bgm = Path.Combine(patchFolder, @"battle\sound\bgm\BGM_D05.csb");
+            long packageSize = new FileInfo(d05Bgm).Length;
+            Check(MusicBank.PackageOwning(game, d05Music) != null, "BGM_D05.csb is the stage package's music");
+            MusicBank.Install(game, d05Music, new byte[] { 1 }, new InstalledSong { Song = "test" });
+            Check(new FileInfo(d05Bgm).Length == 1 && MusicBank.Load(game).ContainsKey("BGM_D05.csb"), "a song goes over a stage package's music");
+            Installer.InstallPackage(game, own, d05, "file");
+            Check(new FileInfo(d05Bgm).Length == packageSize && !MusicBank.Load(game).ContainsKey("BGM_D05.csb"), "updating the stage puts its own music back and the song comes off");
+            MusicBank.Install(game, d05Music, new byte[] { 1 }, new InstalledSong { Song = "test" });
             Installer.Remove(game, own.Key);
+            Check(!File.Exists(d05Bgm) && !MusicBank.Load(game).ContainsKey("BGM_D05.csb") &&
+                  !File.Exists(Path.Combine(patchFolder, @"ex_more_stuff_backup\battle\sound\bgm\BGM_D05.csb")), "removing the stage takes the song and the stage's music, nothing left aside");
             Check(!Directory.Exists(Path.Combine(patchFolder, @"battle\sound")), "removed: the music folder it made is gone too");
             string port = Path.Combine(packages, "port.zip");
             using (ZipArchive zip = ZipFile.Open(port, ZipArchiveMode.Create))

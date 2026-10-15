@@ -43,6 +43,110 @@ namespace ExMoreStuff
 
         static KeyValuePair<string, byte[]> F(string path, byte[] data) { return new KeyValuePair<string, byte[]>(path, data); }
 
+        // a skin that brings its fighter's voice (Juri gótica: JRI_E.csb and JRI_J.csb beside the costume): kept with the costume,
+        // under its own name
+        static void Voices(string game, string scratch)
+        {
+            Console.WriteLine("A skin with its fighter's voice");
+            var files = new List<KeyValuePair<string, byte[]>>
+            {
+                new KeyValuePair<string, byte[]>("skin/RYU_02.obj.emo", File.ReadAllBytes(Directory.GetFiles(Path.Combine(game, "resource", "battle", "chara", "RYU"), "RYU_02.obj.emo")[0])),
+                new KeyValuePair<string, byte[]>("skin/RYU_E.csb", System.Text.Encoding.ASCII.GetBytes("English voice")),
+                new KeyValuePair<string, byte[]>("skin/RYU_J.csb", System.Text.Encoding.ASCII.GetBytes("Japanese voice")),
+                new KeyValuePair<string, byte[]>("skin/KEN_E.csb", System.Text.Encoding.ASCII.GetBytes("someone else's voice")),
+            };
+            var found = SkinImport.Find(files);
+            Check(found.Count == 1 && found[0].Voices.Count == 2 && found[0].Describe.EndsWith("its own voice"), "found with its voice (not Ken's): " + (found.Count > 0 ? found[0].Describe : "nothing"));
+            string zip = Path.Combine(scratch, "voice test.zip");
+            SkinImport.Build(game, found[0], 80, null, zip);
+            using (ZipArchive archive = ZipFile.OpenRead(zip))
+            {
+                Func<string, string> text = name => { var e = archive.Entries.FirstOrDefault(x => x.Name == name); return e == null ? null : new StreamReader(e.Open()).ReadToEnd(); };
+                Check(text("RYU_80_E.csb") == "English voice" && text("RYU_80_J.csb") == "Japanese voice" && !archive.Entries.Any(e => e.Name == "RYU_E.csb" || e.Name.StartsWith("KEN")),
+                      "in the package as RYU_80_E.csb and RYU_80_J.csb, never over Ryu's own voice");
+            }
+            Item item = Installer.Package(zip);
+            Check(item != null && item.Slot == 80, "still a whole EX More Stuff package");
+            // the game's own voice brought along (as Juri gótica does): left out, it changes nothing
+            files[1] = new KeyValuePair<string, byte[]>("skin/RYU_E.csb", File.ReadAllBytes(Path.Combine(game, "resource", "battle", "chara", "RYU", "RYU_E.csb")));
+            SkinImport.Build(game, SkinImport.Find(files)[0], 80, null, zip);
+            using (ZipArchive archive = ZipFile.OpenRead(zip))
+                Check(!archive.Entries.Any(e => e.Name == "RYU_80_E.csb") && archive.Entries.Any(e => e.Name == "RYU_80_J.csb"),
+                      "a copy of the game's own English voice is left out; the changed Japanese one stays");
+        }
+
+        // mods that crash as a costume (user 2026-10-13, Juri gótica): one that changes its fighter's moves, and a model with
+        // many more bones than the game's costume and no physics of its own
+        static void Crashing(string game, string scratch)
+        {
+            Console.WriteLine("Mods that would crash as a costume");
+            Check(SkinImport.ChangesMoves(new[] { "completa/JRI.bac", "completa/JRI.bcm", "completa/JRI_01.obj.emo" }) == "it changes Juri's moves too" &&
+                  SkinImport.ChangesMoves(new[] { "skin/RYU_01.obj.emo", "skin/RYU_01_01.col.emb", "readme.bac.txt" }) == null, "move files found by name (Juri gótica's JRI.bac), none in a plain skin");
+            // a model of 900 bones (the skeleton at byte 32, its count there) over Ryu's Original (433)
+            var model = new byte[64];
+            System.Text.Encoding.ASCII.GetBytes("#EMO").CopyTo(model, 0);
+            BitConverter.GetBytes(32u).CopyTo(model, 16);
+            BitConverter.GetBytes((ushort)900).CopyTo(model, 32);
+            Check(Weight.Bones(model) == 900, "the bone count read as Weight reads it");
+            var files = new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>("skin/RYU_01.obj.emo", model) };
+            string zip = Path.Combine(scratch, "bones test.zip"), said = null;
+            try { SkinImport.Build(game, SkinImport.Find(files)[0], 80, null, zip); } catch (InvalidDataException ex) { said = ex.Message; }
+            Check(said != null && said.Contains("900 bones") && said.Contains("Ryu's Original") && !File.Exists(zip), "900 bones and no physics of its own: not built (" + said + ")");
+            files.Add(new KeyValuePair<string, byte[]>("skin/RYU_01.bsr", new byte[16]));
+            said = null;
+            try { SkinImport.Build(game, SkinImport.Find(files)[0], 80, null, zip); } catch (InvalidDataException ex) { said = ex.Message; }
+            Check(said == null && File.Exists(zip), "with physics of its own (as the SFxT ports): built");
+            // Add Mod From File: a skin that changes its fighter's moves isn't put in, nothing is written
+            var withMoves = new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>("completa/JRI_01.obj.emo", model), new KeyValuePair<string, byte[]>("completa/JRI.bac", new byte[8]) };
+            said = null;
+            try { ModFile.InstallFiles(game, withMoves, "test", "Juri test", "", "", null, text => { }); } catch (InvalidDataException ex) { said = ex.Message; }
+            Check(said != null && said.StartsWith("it changes Juri's moves too"), "Add Mod From File refuses it: " + said);
+        }
+
+        // a color texture file (#EMB) of one 4x4 DXT5 texture: its alpha endpoints and its color
+        static byte[] Emb(byte alpha0, byte alpha1, ushort color)
+        {
+            var b = new byte[64 + 128 + 16];
+            System.Text.Encoding.ASCII.GetBytes("#EMB").CopyTo(b, 0);
+            BitConverter.GetBytes(1).CopyTo(b, 12);       // one texture
+            BitConverter.GetBytes(32).CopyTo(b, 24);      // its entry at 32
+            BitConverter.GetBytes(32).CopyTo(b, 32);      // its data 32 past the entry: 64
+            BitConverter.GetBytes(144).CopyTo(b, 36);
+            System.Text.Encoding.ASCII.GetBytes("DDS ").CopyTo(b, 64);
+            BitConverter.GetBytes(4).CopyTo(b, 64 + 12);
+            BitConverter.GetBytes(4).CopyTo(b, 64 + 16);
+            System.Text.Encoding.ASCII.GetBytes("DXT5").CopyTo(b, 64 + 84);
+            b[192] = alpha0; b[193] = alpha1;               // alpha block (indices 0: every pixel alpha0)
+            BitConverter.GetBytes(color).CopyTo(b, 200);    // color block: c0, c1 the same, indices 0
+            BitConverter.GetBytes(color).CopyTo(b, 202);
+            return b;
+        }
+
+        // Female Shao Kahn (user 2026-10-13): her colors differ in their textures' alpha (the mask her materials tint), and
+        // were taken for copies of color 1 and given patterns; colors 7-10 she doesn't have are patterns, and the card's
+        // checker finds exactly those
+        static void AlphaColors(string game, string scratch)
+        {
+            Console.WriteLine("Colors that differ only in their alpha");
+            byte[] one = Emb(255, 255, 0x7BEF), masked = Emb(0, 0, 0x7BEF), copy = Emb(255, 255, 0x7BEF);
+            Check(!ColorVariants.LookSame(ColorVariants.Look(one), ColorVariants.Look(masked)) && ColorVariants.LookSame(ColorVariants.Look(one), ColorVariants.Look(copy)),
+                  "the same color with another alpha mask isn't a copy; a byte-for-byte copy is");
+            var model = File.ReadAllBytes(Path.Combine(game, "resource", "battle", "chara", "RYU", "RYU_01.obj.emo"));
+            var files = new List<KeyValuePair<string, byte[]>>
+            {
+                new KeyValuePair<string, byte[]>("skin/RYU_01.obj.emo", model),
+                new KeyValuePair<string, byte[]>("skin/RYU_01_01.col.emb", one), new KeyValuePair<string, byte[]>("skin/RYU_01_02.col.emb", masked),
+                new KeyValuePair<string, byte[]>("skin/RYU_01_03.col.emb", copy),
+                // one material for all three (a copy needs the same material too)
+                new KeyValuePair<string, byte[]>("skin/RYU_01_01.obj.emm", new byte[16]), new KeyValuePair<string, byte[]>("skin/RYU_01_02.obj.emm", new byte[16]),
+                new KeyValuePair<string, byte[]>("skin/RYU_01_03.obj.emm", new byte[16]),
+            };
+            string zip = Path.Combine(scratch, "alpha test.zip");
+            SkinImport.Build(game, SkinImport.Find(files)[0], 80, null, zip);
+            var patterned = ColorVariants.PatternColors(zip, "RYU_80");
+            Check(patterned.SequenceEqual(new[] { 3, 4, 5, 6, 7, 8, 9, 10 }), "colors 1 and 2 its own; 3 (a copy of 1) and 4-10 (not in it) patterns: " + string.Join(",", patterned));
+        }
+
         static void Main(string[] args)
         {
             string game = args[0], skin = args[1], scratch = args[2];
@@ -64,27 +168,35 @@ namespace ExMoreStuff
             using (ZipArchive z = ZipFile.OpenRead(zip))
             {
                 var names = z.Entries.Select(e => e.Name).ToList();
-                Check(names.Count == 32 && names.All(n => n.StartsWith("BLK_08")), "32 files, all BLK_08 (got " + names.Count + ")");
-                Check(names.Count(n => n.EndsWith(".png")) == 8 && !names.Contains("BLK_08_01.png") && !names.Contains("BLK_08_02.png"),
-                      "a picture for each of the 8 colors it doesn't bring, none for its own");
+                Check(names.Count == 33 && names.All(n => n.StartsWith("BLK_08")), "33 files, all BLK_08 (got " + names.Count + ")");
+                Check(Enumerable.Range(2, 9).All(n => Same(Entry(zip, "BLK_08_" + n.ToString("D2") + ".png"), ColorVariants.PatternPicture(n - 1))), "colors 2-10's pictures: their patterns'");
             }
-            Check(Same(Entry(zip, "BLK_08_03.png"), SkinImport.Unfinished), "color 3's picture: unfinished");
-            using (var picture = System.Drawing.Image.FromStream(new MemoryStream(SkinImport.Unfinished)))
-                Check(picture.Width == 256 && picture.Height == 384 && SkinImport.Unfinished.Length < 20000,
-                      "the unfinished picture: 256 x 384, small (" + SkinImport.Unfinished.Length + " bytes)");
+            // colors 3-10, which it doesn't bring, and color 2, the same as color 1: ready-made patterns 1-9
+            var made = Enumerable.Range(2, 9).Select(n => Entry(zip, "BLK_08_" + n.ToString("D2") + ".col.emb")).ToList();
+            Check(Enumerable.Range(0, 9).All(k => Same(made[k], ColorVariants.Patterned(color2, k + 1))), "colors 2-10: patterns 1-9, copied in");
+            Check(made.Select(m => Convert.ToBase64String(m)).Distinct().Count() == 9, "no two of them alike");
+            Check(!ColorVariants.LookSame(ColorVariants.Look(made[0]), ColorVariants.Look(color2)), "color 2 doesn't look like color 1 any more");
+            Check(!Same(made[3], File.ReadAllBytes(GameFile(game, "BLK_01_05.col.emb"))), "color 5 isn't the game's any more");
+            Check(Enumerable.Range(2, 9).All(n => Same(Entry(zip, "BLK_08_" + n.ToString("D2") + ".obj.emm"), File.ReadAllBytes(GameFile(game, "BLK_01_02.obj.emm")))),
+                  "their material: the one the skin's color uses");
+            Check(GameArt.ReadContainer(made[0]).All(e => GameArt.DecodeDds(e.Value) != null) && GameArt.ReadContainer(made[0]).Count == GameArt.ReadContainer(color2).Count,
+                  "a pattern's textures read, as many as the skin's color has (its materials use them by number)");
+            string again = Path.Combine(scratch, "again.zip");
+            SkinImport.Build(game, c, 8, null, again);
+            Check(Same(Entry(again, "BLK_08_07.col.emb"), made[5]), "built again: the same colors (every PC makes the same)");
             string modelZip = Path.Combine(scratch, "model.zip");
             SkinImport.Build(game, SkinImport.Find(new List<KeyValuePair<string, byte[]>> { F("m/BLK_01.obj.emo", model) }).Single(), 8, null, modelZip);
             using (ZipArchive z = ZipFile.OpenRead(modelZip))
-                Check(!z.Entries.Any(e => e.Name.EndsWith(".png")), "a model alone, made for the game's colors: no unfinished pictures");
+                Check(!z.Entries.Any(e => e.Name.EndsWith(".png")), "a model alone, made for the game's colors: no pictures");
+            Check(Same(Entry(modelZip, "BLK_08_05.col.emb"), File.ReadAllBytes(GameFile(game, "BLK_01_05.col.emb"))), "and its colors stay the game's");
             Check(Same(Entry(zip, "BLK_08.obj.emo"), model), "the skin's model");
             Check(Same(Entry(zip, "BLK_08.nml.emb"), File.ReadAllBytes(GameFile(game, "BLK_01.nml.emb"))), "the game's normals");
-            Check(Same(Entry(zip, "BLK_08_01.col.emb"), color2) && Same(Entry(zip, "BLK_08_02.col.emb"), color2), "colors 1 and 2: the skin's color");
+            Check(Same(Entry(zip, "BLK_08_01.col.emb"), color2), "color 1: the skin's color");
             Check(Same(Entry(zip, "BLK_08_01.obj.emm"), File.ReadAllBytes(GameFile(game, "BLK_01_02.obj.emm"))), "color 1's material: the game's for color 2, which it was made over");
-            Check(Same(Entry(zip, "BLK_08_05.col.emb"), File.ReadAllBytes(GameFile(game, "BLK_01_05.col.emb"))), "color 5: the game's");
 
             Console.WriteLine("Several versions become colors");
-            var v2 = (byte[])color2.Clone(); v2[v2.Length - 1] ^= 1;
-            var v3 = (byte[])color2.Clone(); v3[v3.Length - 1] ^= 2;
+            var v2 = ColorVariants.Patterned(color2, 8);   // versions that look different (patterns 8 and 9, which colors 4-10 don't get)
+            var v3 = ColorVariants.Patterned(color2, 9);
             var versions = new List<KeyValuePair<string, byte[]>>(files)
             {
                 F("ver2/BLK_01.obj.emo", model), F("ver2/BLK_01_02.col.emb", v2),
@@ -92,10 +204,22 @@ namespace ExMoreStuff
             };
             c = SkinImport.Find(versions).Single();
             Check(c.Versions == 3 && !c.ModelsDiffer, "3 versions, one model");
-            Check(Same(c.Colors[0].Col, color2) && Same(c.Colors[1].Col, v2) && Same(c.Colors[2].Col, v3) && c.Colors[3] == null, "colors 1-3: versions 1-3, 4-10 the game's");
+            Check(Same(c.Colors[0].Col, color2) && Same(c.Colors[1].Col, v2) && Same(c.Colors[2].Col, v3) && c.Colors[3] == null, "colors 1-3: versions 1-3, 4-10 not brought");
             zip = Path.Combine(scratch, "versions.zip");
             SkinImport.Build(game, c, 8, null, zip);
             Check(Same(Entry(zip, "BLK_08_03.col.emb"), v3) && Same(Entry(zip, "BLK_08_03.obj.emm"), File.ReadAllBytes(GameFile(game, "BLK_01_02.obj.emm"))), "color 3: version 3 with the game's color-2 material");
+            Check(Enumerable.Range(4, 7).All(n => { var m = Entry(zip, "BLK_08_" + n.ToString("D2") + ".col.emb"); return m != null && !Same(m, color2) && !Same(m, v2) && !Same(m, v3); }),
+                  "colors 4-10: patterns, not the versions");
+            Check(Same(Entry(zip, "BLK_08_02.col.emb"), v2), "color 2: version 2, kept (it looks different)");
+            // a version that differs from another by a change nobody would see is made again too
+            var nearly = (byte[])color2.Clone(); nearly[nearly.Length - 1] ^= 1;
+            var copies = new List<KeyValuePair<string, byte[]>>(files) { F("ver2/BLK_01.obj.emo", model), F("ver2/BLK_01_02.col.emb", nearly) };
+            c = SkinImport.Find(copies).Single();
+            Check(Same(c.Colors[1].Col, nearly) && ColorVariants.LookSame(ColorVariants.Look(nearly), ColorVariants.Look(color2)), "version 2: a byte apart from version 1, it looks the same");
+            zip = Path.Combine(scratch, "nearly.zip");
+            SkinImport.Build(game, c, 8, null, zip);
+            Check(Same(Entry(zip, "BLK_08_01.col.emb"), color2) && Same(Entry(zip, "BLK_08_02.col.emb"), ColorVariants.Patterned(color2, 1)),
+                  "so color 2 gets pattern 1 instead");
             var other = (byte[])model.Clone(); other[other.Length - 1] ^= 1;
             versions[versions.Count - 2] = F("ver3/BLK_01.obj.emo", other);
             Check(SkinImport.Find(versions).Single().ModelsDiffer, "a version with another model is noticed");
@@ -112,14 +236,30 @@ namespace ExMoreStuff
             Check(Enumerable.Range(0, 10).All(i => c.Colors[i] != null && c.Colors[i].Col[1] == i + 1 && c.Colors[i].Emm[1] == i + 1), "its 10 numbered colors with their materials from the other folder");
 
             Console.WriteLine("A mod in a code of its own");
-            var own = new List<KeyValuePair<string, byte[]>> { F("m/BLK_23.obj.emo", model), F("m/BLK_23_01.col.emb", color2), F("m/BLK_23.png", new byte[] { 5 }), F("m/BLK_23_01.png", new byte[] { 6 }) };
+            byte[] blue;
+            using (var bitmap = new System.Drawing.Bitmap(8, 8))
+            using (var png = new MemoryStream())
+            {
+                using (var g = System.Drawing.Graphics.FromImage(bitmap)) g.Clear(System.Drawing.Color.FromArgb(40, 70, 200));
+                bitmap.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+                blue = png.ToArray();
+            }
+            var own = new List<KeyValuePair<string, byte[]>> { F("m/BLK_23.obj.emo", model), F("m/BLK_23_01.col.emb", color2), F("m/BLK_23.png", new byte[] { 5 }), F("m/BLK_23_01.png", blue) };
             c = SkinImport.Find(own).Single();
             Check(c.OwnCode && c.Number == 23 && c.Pictures.Count == 2, "its code 23 and its pictures");
             zip = Path.Combine(scratch, "own.zip");
             SkinImport.Build(game, c, 23, new byte[] { 1, 2, 3 }, zip);
-            Check(Same(Entry(zip, "BLK_23.png"), new byte[] { 5 }) && Same(Entry(zip, "BLK_23_01.png"), new byte[] { 6 }), "its own pictures, not the mod page's");
-            Check(Same(Entry(zip, "BLK_23_02.col.emb"), File.ReadAllBytes(GameFile(game, "BLK_01_02.col.emb"))), "the colors it doesn't bring: the game's costume 1");
-            Check(Same(Entry(zip, "BLK_23_02.png"), SkinImport.Unfinished), "and their pictures say unfinished");
+            Check(Entry(zip, "BLK_23.png") == null && Same(Entry(zip, "BLK_23_01.png"), blue),
+                  "a mod page picture that won't read: no card picture from the mod's files (user: only GameBanana's), its own color pictures stay");
+            SkinImport.Build(game, c, 23, null, zip);
+            Check(Same(Entry(zip, "BLK_23.png"), new byte[] { 5 }), "not a GameBanana install (no page picture given): the mod's own card picture");
+            SkinImport.Build(game, c, 23, blue, zip);
+            System.Drawing.Color shown;
+            using (var page = new System.Drawing.Bitmap(new MemoryStream(Entry(zip, "BLK_23.png")))) shown = page.GetPixel(0, 0);
+            Check(shown.R == 40 && shown.G == 70 && shown.B == 200 && Same(Entry(zip, "BLK_23_01.png"), blue),
+                  "the mod page's picture for the costume (thumbnail = the page's, user), its own color pictures stay");
+            Check(Same(Entry(zip, "BLK_23_02.col.emb"), ColorVariants.Patterned(color2, 1)) && Same(Entry(zip, "BLK_23_02.png"), ColorVariants.PatternPicture(1)),
+                  "the colors it doesn't bring: patterns, with their pictures");
 
             Console.WriteLine("Shared codes");
             Func<long, long, string[], GameBanana.Mod> mod = (id, added, names) => new GameBanana.Mod
@@ -207,6 +347,10 @@ namespace ExMoreStuff
             string copy = Path.Combine(scratch, "same mod renamed.zip");
             File.Copy(modZip, copy);
             Check(Installer.AddedBefore(fake, modZip) != null && Installer.AddedBefore(fake, copy) != null, "Add Mod From File sees it was added before, under any name");
+
+            Voices(game, scratch);
+            Crashing(game, scratch);
+            AlphaColors(game, scratch);
 
             Directory.Delete(scratch, true);
             Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");

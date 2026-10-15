@@ -68,6 +68,8 @@ namespace ExMoreStuff
         // files must be there, and the source needs both.
         public static string Problem(string game, string stage, string source, Func<string, string> name)
         {
+            if (Overrides.IsOverride(source))   // an override stage (Overrides): its zip with both files
+                return StagePack.Suffixes.All(s => Overrides.StageBytes(game, source, s) != null) ? null : name(source) + "'s zip isn't there any more, or it's missing its files.";
             foreach (var check in source == null || source == stage ? new[] { stage } : new[] { stage, source })
             {
                 string emz = SourceFile(game, check, ".emz");
@@ -84,12 +86,43 @@ namespace ExMoreStuff
             if (list.Any(r => r.Stage == stage)) throw new InvalidOperationException("it is already replaced");
             // Both files converted before anything is moved.
             var made = new Dictionary<string, byte[]>();
+            Override over = Overrides.Find(game, source);
             foreach (string suffix in StagePack.Suffixes)
             {
+                if (over != null)   // an override stage: its files from its zip, under its target's code
+                {
+                    byte[] data = Overrides.StageBytes(game, source, suffix);
+                    if (data == null) throw new FileNotFoundException(over.Name + "'s STG_" + over.Target + suffix + " wasn't found in " + Path.GetFileName(over.Package));
+                    made[StagePack.RelativePath(stage, suffix)] = over.Target == stage ? data : StagePack.Recode(data, over.Target, stage);
+                    continue;
+                }
                 string from = SourceFile(game, source, suffix);
                 if (from == null) throw new FileNotFoundException("STG_" + source + suffix + " wasn't found");
                 made[StagePack.RelativePath(stage, suffix)] = StagePack.Recode(File.ReadAllBytes(from), source, stage);
             }
+            Write(game, list, stage, source, made);
+        }
+
+        /// <summary>`stage` plays as files given here (a docked stage's, from its zip: not installed), `code` being the
+        /// code they're made for; `source` names them in the list (the stage preview's "docked"). Restore puts it back.</summary>
+        public static void ReplaceWith(string game, string stage, string source, string code, IDictionary<string, byte[]> files)
+        {
+            if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
+            var list = Load(game);
+            if (list.Any(r => r.Stage == stage)) throw new InvalidOperationException("it is already replaced");
+            var made = new Dictionary<string, byte[]>();
+            foreach (string suffix in StagePack.Suffixes)
+            {
+                byte[] data;
+                if (!files.TryGetValue(suffix, out data)) throw new FileNotFoundException("STG_" + code + suffix + " wasn't found");
+                made[StagePack.RelativePath(stage, suffix)] = code == stage ? data : StagePack.Recode(data, code, stage);
+            }
+            Write(game, list, stage, source, made);
+        }
+
+        // the converted files into the patch folder (what was there moved to the backup folder first), and listed
+        static void Write(string game, List<Replacement> list, string stage, string source, Dictionary<string, byte[]> made)
+        {
             var record = new Replacement { Stage = stage, Source = source };
             try
             {

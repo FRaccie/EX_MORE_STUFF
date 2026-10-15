@@ -27,7 +27,7 @@ namespace ExMoreStuff
             var title = new Label { Text = "Rename " + what, AutoSize = false, AutoEllipsis = true, BackColor = Color.Transparent, Font = Theme.Bold(13f), ForeColor = Theme.Text, Bounds = new Rectangle(22, 18, 396, 30) };
             var about = new Label
             {
-                Text = "The name Ember's menus show once you apply the changes and start the game. Only you see it. " +
+                Text = "The name rollback games' menus show once you apply the changes and start the game. Only you see it. " +   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                        "English letters, numbers, spaces and _ - . only. Leave it empty for \"Custom\" and the number.",
                 AutoSize = false, BackColor = Color.Transparent, Font = Theme.Font(9f), ForeColor = Theme.Muted, Bounds = new Rectangle(22, 52, 396, 54),
             };

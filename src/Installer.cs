@@ -19,6 +19,7 @@ namespace ExMoreStuff
         public string Source;               // "catalog", or "file" for a player's own package
         public string Package;              // a player's own package: the zip it came from, to switch it back on
         public string Shown;                // its name in EMBER's menus (the player can rename it), in <prefix>.txt; null: never set
+        public bool Theirs;                 // Package is the player's own file (picked from inside Mods\, so not copied): deleting leaves it
         public List<string> Files = new List<string>();
     }
 
@@ -48,6 +49,7 @@ namespace ExMoreStuff
                     var record = new Installed { Item = Item.FromJson(j), Source = Convert.ToString(j["source"]) };
                     if (j.ContainsKey("package") && j["package"] != null) record.Package = Convert.ToString(j["package"]);
                     if (j.ContainsKey("shown") && j["shown"] != null) record.Shown = Convert.ToString(j["shown"]);
+                    if (j.ContainsKey("theirs") && j["theirs"] is bool) record.Theirs = (bool)j["theirs"];
                     if (j.ContainsKey("files") && j["files"] is System.Collections.ArrayList)
                         foreach (object f in (System.Collections.ArrayList)j["files"]) record.Files.Add(Convert.ToString(f));
                     result.Add(record);
@@ -65,6 +67,7 @@ namespace ExMoreStuff
                 j["source"] = r.Source;
                 j["package"] = r.Package;
                 j["shown"] = r.Shown;
+                if (r.Theirs) j["theirs"] = true;
                 j["files"] = r.Files;
                 return j;
             };
@@ -86,7 +89,8 @@ namespace ExMoreStuff
 
         // An item's name in EMBER's menus: the first line of <prefix>.txt beside it (JHA_71.txt, STG_C71.txt), at most
         // 40 characters; without one EMBER says "Custom 71" or "Custom stage C71". Only English letters, digits, spaces
-        // and _ - . (every font EMBER has draws them); anything else is dropped.
+        // and _ - . (every font EMBER has draws them); an accented letter becomes its plain one ("Juri gótica" -> "Juri
+        // gotica", user 2026-10-13: it showed as "Juri gtica"), anything else is dropped.
         public const int NameBytes = 40;
 
         public static bool NameCharacter(char c)
@@ -96,7 +100,9 @@ namespace ExMoreStuff
 
         public static string CleanName(string name)
         {
-            string clean = Regex.Replace(new string((name ?? "").Where(NameCharacter).ToArray()), " {2,}", " ").Trim();
+            string plain = new string((name ?? "").Normalize(System.Text.NormalizationForm.FormD)
+                .Where(c => System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark).ToArray());
+            string clean = Regex.Replace(new string(plain.Where(NameCharacter).ToArray()), " {2,}", " ").Trim();
             return clean.Length > NameBytes ? clean.Substring(0, NameBytes).TrimEnd() : clean;
         }
 
@@ -138,7 +144,7 @@ namespace ExMoreStuff
             if (item.IsColor) return new Regex("^" + p + @"\.(col\.emb|obj\.emm|png)$", RegexOptions.IgnoreCase);
             return item.IsStage
                 ? new Regex("^(" + p + @"\.(emz|tex\.emz|png|jpg)|BGM_" + Regex.Escape(item.Code) + @"[23]?\.csb)$", RegexOptions.IgnoreCase)
-                : new Regex("^" + p + @"(\.(obj\.emo|shd\.emo|nml\.emb|bsr|csb|png)|_(0[1-9]|10)\.(col\.emb|obj\.emm|png))$", RegexOptions.IgnoreCase);
+                : new Regex("^" + p + @"(\.(obj\.emo|shd\.emo|nml\.emb|bsr|csb|png)|_(E|J)\.csb|_(0[1-9]|10)\.(col\.emb|obj\.emm|png))$", RegexOptions.IgnoreCase);   // _E/_J.csb: its voice
         }
 
         // Why a package can't be installed as `item`, or null.
@@ -210,7 +216,9 @@ namespace ExMoreStuff
             }
         }
 
-        public static void InstallPackage(string game, Item item, string zipPath, string source)
+        /// <summary>`theirs`: the zip is the player's own file, not EX More Stuff's copy (Installed.Theirs); a package put in
+        /// again from the same zip (an update, switched back on, a new code) stays theirs.</summary>
+        public static void InstallPackage(string game, Item item, string zipPath, string source, bool theirs = false)
         {
             if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
             var records = Load(game);
@@ -239,7 +247,10 @@ namespace ExMoreStuff
                 Installed shelved = removed.FirstOrDefault(r => r.Item.Key == item.Key);
                 if (shelved != null) removed.Remove(shelved);
                 string shown = old != null && old.Shown != null ? old.Shown : shelved != null && shelved.Shown != null ? shelved.Shown : CleanName(item.Name);
-                var record = new Installed { Item = item, Source = source, Package = source == "file" ? Path.GetFullPath(zipPath) : null, Shown = shown };
+                string package = source == "file" ? Path.GetFullPath(zipPath) : null;
+                Func<Installed, bool> same = r => r != null && r.Theirs && r.Package != null && package != null && string.Equals(Path.GetFullPath(r.Package), package, StringComparison.OrdinalIgnoreCase);
+                theirs = package != null && (theirs || same(old) || same(shelved));
+                var record = new Installed { Item = item, Source = source, Package = package, Shown = shown, Theirs = theirs };
                 foreach (ZipArchiveEntry e in files)
                 {
                     string target = Path.Combine(FolderFor(game, item, e.Name), e.Name);
@@ -251,6 +262,7 @@ namespace ExMoreStuff
                 records.Add(record);
                 Save(game, records, removed);
             }
+            PerfTest.Unlock(item.Key);   // new files in: one that failed its performance test may be tried again
         }
 
         static bool IsSong(string game, string file)
@@ -261,6 +273,14 @@ namespace ExMoreStuff
 
         static void Delete(string game, Installed record)
         {
+            // A song put in on the Music page over the package's own music comes off first, so the package's file is
+            // back in its place to go with the rest.
+            Dictionary<string, InstalledSong> songs;
+            try { songs = MusicBank.Load(game); }
+            catch (InvalidDataException) { songs = new Dictionary<string, InstalledSong>(); }
+            foreach (string relative in record.Files)
+                if (string.Equals(Path.GetDirectoryName(relative), MusicBank.Folder, StringComparison.OrdinalIgnoreCase) && songs.ContainsKey(Path.GetFileName(relative)))
+                    MusicBank.Remove(game, MusicSlot.FromFile(relative));
             foreach (string relative in record.Files)
             {
                 string path = Path.Combine(Game.PatchFolder(game), relative);
@@ -328,7 +348,7 @@ namespace ExMoreStuff
             var records = Load(game);
             if (records.Any(r => r.Item.Key == record.Item.Key))
             {
-                InstallPackage(game, moved, record.Package, "file");   // the new files first, so nothing is lost on a failure
+                InstallPackage(game, moved, record.Package, "file", record.Theirs);   // the new files first, so nothing is lost on a failure
                 records = Load(game);
                 Installed old = records.First(r => r.Item.Key == record.Item.Key);
                 Delete(game, old);

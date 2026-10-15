@@ -116,7 +116,7 @@ namespace ExMoreStuff
         {
             bool shared = Installer.Load(game).Concat(Installer.Removed(game))
                 .Any(r => r.Item.Key != record.Item.Key && string.Equals(r.Package, record.Package, StringComparison.OrdinalIgnoreCase));
-            return !string.IsNullOrEmpty(record.Package) && File.Exists(record.Package) && !shared;
+            return !string.IsNullOrEmpty(record.Package) && File.Exists(record.Package) && !shared && !record.Theirs;
         }
 
         // the game stages a stage stands in for (the Stages page's replace): deleting it gives them their own back
@@ -131,22 +131,33 @@ namespace ExMoreStuff
             return item.IsCostume ? CostumeSwaps.Load(game).Where(s => s.Fighter == item.Fighter && s.Source == item.Slot).Select(s => s.Costume).ToList() : new List<int>();
         }
 
-        public static string DeleteQuestion(string game, Installed record, string title)
+        /// <summary>Asks whether to delete a package of the player's (DeleteDialog). Deleting takes EX More Stuff's copy of its
+        /// zip to the Recycle Bin too (RecyclesZip; user 2026-10-14: keeping it "is just polluting the user's PC"): the
+        /// player's own file, or the download, is still there.</summary>
+        public static DeleteDialog.Choice AskDelete(IWin32Window owner, string game, Installed record, string title)
+        {
+            using (var dialog = new DeleteDialog(title, DeleteQuestion(game, record)))
+            {
+                dialog.ShowDialog(owner);
+                return dialog.Picked;
+            }
+        }
+
+        // what deleting does (user 2026-10-14: say it's EX More Stuff's copy that goes, not the file they added)
+        public static string DeleteQuestion(string game, Installed record)
         {
             Item item = record.Item;
             var costumes = CostumesStandingIn(game, item).Select(CostumeGrid.CostumeName).ToList();
-            bool inGame = Installer.Load(game).Any(r => r.Item.Key == item.Key), recycle = RecyclesZip(game, record);
-            bool kept = !recycle && !string.IsNullOrEmpty(record.Package);
+            bool inGame = Installer.Load(game).Any(r => r.Item.Key == item.Key);
+            bool downloaded = record.Source == "catalog" || (item.Id ?? "").StartsWith("gamebanana:", StringComparison.OrdinalIgnoreCase);
             var standing = StandingIn(game, item).Select(Stages.Name).ToList();
-            return "Delete " + title + " for good?\n\n" +
-                   (inGame ? "It's taken out of the game and off EX More Stuff's lists" : "It's taken off EX More Stuff's lists") +
-                   (item.IsStage ? ", with any songs you put on " + item.Code + " on the Music page" : "") + ".\n" +
+            return (inGame ? "It's taken out of the game and out of EX More Stuff." : "It's taken out of EX More Stuff.") +
+                   (item.IsStage ? " Songs you put on " + item.Code + " go with it." : "") + "\n" +
                    (standing.Count > 0 ? string.Join(" and ", standing) + (standing.Count > 1 ? ", which play as it now, get their own stages back.\n"
                                                                                            : ", which plays as it now, gets its own stage back.\n") : "") +
                    (costumes.Count > 0 ? Fighters.Name(item.Fighter) + "'s " + string.Join(" and ", costumes) + (costumes.Count > 1 ? ", which play as it now, get their own costumes back.\n"
                                                                                                                                   : ", which plays as it now, gets its own costume back.\n") : "") +
-                   (recycle ? "Its zip (" + Path.GetFileName(record.Package) + ") goes to the Recycle Bin." :
-                    kept && File.Exists(record.Package) ? "Its zip stays: another package uses it." : kept ? "Its zip isn't where it was, so nothing else is touched." : "");
+                   "\n" + (downloaded ? "You can download it again from Browse Mods." : "The original mod file you added is untouched.");
         }
 
         /// <summary>The deleting itself, off the window's thread (the zip goes after, with RecycleZip). A note on songs, or null.</summary>
@@ -179,7 +190,8 @@ namespace ExMoreStuff
         async Task Delete(Installed record, PackageRow row)
         {
             if (Game.IsRunning()) { Say("Can't delete it: close the game first", true); return; }
-            if (MessageBox.Show(FindForm(), DeleteQuestion(game, record, row.Title), "EX More Stuff", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) return;
+            var choice = AskDelete(FindForm(), game, record, row.Title);
+            if (choice == DeleteDialog.Choice.Cancel) return;
             bool recycle = RecyclesZip(game, record);
             Busy(true);
             string g = game, note = null;
@@ -196,7 +208,7 @@ namespace ExMoreStuff
                 if (changed != null) changed();
                 Fill();
             }
-            Say(row.Title + " is deleted" + (recycle ? "; its zip is in the Recycle Bin" : "") + (note != null ? ". " + note : ""), note != null);
+            Say(row.Title + " is deleted" + (note != null ? ". " + note : ""), note != null);
         }
 
         static Image Picture(Installed record)
@@ -208,7 +220,7 @@ namespace ExMoreStuff
             try
             {
                 byte[] bytes = Installer.PackagePicture(record.Package, record.Item);
-                image = bytes == null ? null : Image.FromStream(new MemoryStream(bytes));
+                image = bytes == null ? null : Pictures.Read(bytes);
             }
             catch (Exception) { image = null; }
             lock (pictures) pictures[key] = image;
@@ -249,6 +261,7 @@ namespace ExMoreStuff
         {
             status.Text = text;
             status.ForeColor = problem ? Theme.Warning : Theme.Text;
+            if (problem) BugReport.Noted(text);
         }
     }
 

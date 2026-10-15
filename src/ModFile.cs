@@ -11,7 +11,7 @@ using System.Text.RegularExpressions;
 namespace ExMoreStuff
 {
     // A mod file the player has (Advanced > Add Mod From File), or a GameBanana stage mod: its skins become costumes (SkinImport),
-    // its new colors (30-99) colors of their own, and its stages become stages of their own, each in a personal slot or code (costumes in a personal seat 84-80, then a free one from 79 down; stages U01 up, which
+    // its new colors (30-99) colors of their own, and its stages become stages of their own, each in a personal slot or code (costumes in a personal seat 84-80, then a free one 40 down, then 79 down; stages U01 up, which
     // only that player sees). A stage mod usually replaces one of the game's (STG_TRN.emz ...): it's re-coded to its new
     // code, the part it doesn't bring (model or textures) comes from the game, and its music goes with it. Only the
     // game's file types are taken out of the archive and nothing in it is run (GameBanana.Unpack).
@@ -62,7 +62,7 @@ namespace ExMoreStuff
         /// the first free one from 30 up; 0 when none is left.</summary>
         public static int FreeColor(string game, string fighter, int costume, int wanted)
         {
-            var taken = new HashSet<int>(Installer.Load(game).Concat(Installer.Removed(game))
+            var taken = new HashSet<int>(Installer.Load(game).Concat(Installer.Removed(game)).Concat(Docked.Load())
                 .Where(r => r.Item.IsColor && r.Item.Fighter == fighter && r.Item.Slot == costume).Select(r => r.Item.Color));
             Func<int, bool> free = n => !taken.Contains(n) && !File.Exists(Path.Combine(Game.PatchFolder(game), "battle", "chara", fighter,
                 fighter + "_" + costume.ToString("D2") + "_" + n.ToString("D2") + ".col.emb"));
@@ -129,7 +129,7 @@ namespace ExMoreStuff
         /// <summary>The first personal stage code (U01 up) nothing uses (no package of EX More Stuff's, no file there), or null.</summary>
         public static string FreeStageCode(string game)
         {
-            var taken = new HashSet<string>(Installer.Load(game).Concat(Installer.Removed(game)).Where(r => r.Item.IsStage).Select(r => r.Item.Code));
+            var taken = new HashSet<string>(Installer.Load(game).Concat(Installer.Removed(game)).Concat(Docked.Load()).Where(r => r.Item.IsStage).Select(r => r.Item.Code));
             foreach (string code in PersonalStageCodes())
             {
                 if (!taken.Contains(code) && !File.Exists(Path.Combine(Game.PatchFolder(game), "battle", "stage", "STG_" + code + ".emz"))) return code;
@@ -152,20 +152,8 @@ namespace ExMoreStuff
             Write(package, zipPath);
         }
 
-        public static byte[] Png(byte[] picture)
-        {
-            if (picture == null) return null;
-            try
-            {
-                using (var image = Image.FromStream(new MemoryStream(picture)))
-                using (var png = new MemoryStream())
-                {
-                    image.Save(png, ImageFormat.Png);
-                    return png.ToArray();
-                }
-            }
-            catch (Exception) { return null; }   // a picture that won't read: it goes in without one
-        }
+        // a picture that won't read: it goes in without one
+        public static byte[] Png(byte[] picture) { return Pictures.Png(picture); }
 
         public static void Write(List<KeyValuePair<string, byte[]>> package, string zipPath)
         {
@@ -211,14 +199,60 @@ namespace ExMoreStuff
                                 author, where ?? " (" + Path.GetFileName(path) + ")", picture, say);
         }
 
+        // A package an earlier dock of this mod built (named as InstallFiles names them: "<name> - <code>.zip"), not in the
+        // game: docked again as it is, with what was changed in it since (its code, its stage picture: user 2026-10-14,
+        // Antarctica's chosen picture was lost when it was docked again and its zip built over). The newest if several.
+        static string BuiltBefore(string game, string folder, string head, string tail, Func<Item, bool> kind)
+        {
+            if (!Directory.Exists(folder)) return null;
+            var inGame = new HashSet<string>(Installer.Load(game).Concat(Installer.Removed(game)).Where(r => !string.IsNullOrEmpty(r.Package)).Select(r => Path.GetFullPath(r.Package)),
+                                             StringComparer.OrdinalIgnoreCase);
+            var named = new Regex("^" + Regex.Escape(head) + "[A-Za-z0-9]+" + Regex.Escape(tail) + @"\.zip$", RegexOptions.IgnoreCase);
+            return Directory.GetFiles(folder, "*.zip")
+                .Where(f => named.IsMatch(Path.GetFileName(f)) && !inGame.Contains(Path.GetFullPath(f)))
+                .Where(f => { Item it = Installer.Package(f); return it != null && kind(it); })
+                .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+        }
+
+        static void DockAgain(string zip, Action<string> dock, Result result, string what)
+        {
+            if (Docked.Has(zip)) { result.Problems.Add(what + " (" + Path.GetFileName(zip) + ") is docked already"); return; }
+            dock(zip);
+            result.Into.Add(what + ", as you left it");
+        }
+
+        /// <summary>A mod file that isn't a package, docked for edits: its packages built as Install builds them (in Mods\,
+        /// each in a slot or code of the player's own) and docked (Docked), not put in the game; the game may be open.
+        /// Into: what was docked ("stage U03"); Problems: what wasn't.</summary>
+        public static Result Dock(string game, string path, Action<string> say)
+        {
+            string patch = Game.PatchFolder(game);
+            Directory.CreateDirectory(patch);
+            say("Unpacking " + Path.GetFileName(path) + "...");
+            var files = GameBanana.Unpack(path, Path.Combine(patch, "ex_more_stuff.unpack"));
+            return InstallFiles(game, files, "file:" + Md5(path).Substring(0, 16), NameFrom(path), null, " (" + Path.GetFileName(path) + ")", null, say, dock: Docked.Add);
+        }
+
         /// <summary>The same with a mod's files already unpacked (paths as "file/folder/name"); `where` says where it came
         /// from, for its description (" on GameBanana (page)").</summary>
         public static Result InstallFiles(string game, IList<KeyValuePair<string, byte[]>> files, string id, string name, string author, string where, byte[] picture, Action<string> say,
-                                          string version = "", Func<string, string> sharedStage = null)
+                                          string version = "", Func<string, string> sharedStage = null, Action<string> dock = null)
         {
-            if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
+            // dock: each package built goes to it (docked for edits, user 2026-10-14: "its saying i cant dock this stage")
+            // instead of into the game, which then can stay open; music and override stages go straight into the game, so
+            // they're left out
+            if (dock == null && Game.IsRunning()) throw new InvalidOperationException("close the game first");
             string patch = Game.PatchFolder(game);
             name = name.Trim();
+            // an override stage (override_KOR.txt in it): in its game stage's place, no code of its own (Overrides)
+            if (Overrides.Target(files.Select(f => f.Key)) != null)
+            {
+                if (dock != null) throw new InvalidDataException("an override stage goes straight into the game's stage, so it can't be docked: add it without docking");
+                var replaced = new Result();
+                string target = Overrides.Install(game, files, id + ":override", name, author, version, picture);
+                replaced.Into.Add("in place of " + Stages.Name(target));
+                return replaced;
+            }
             var costumes = SkinImport.Find(files);
             var stages = FindStages(files);
             var colors = FindColors(files);
@@ -231,6 +265,10 @@ namespace ExMoreStuff
             }).Where(m => m != null).GroupBy(m => m.Slot.File, StringComparer.OrdinalIgnoreCase).Select(g => g.OrderBy(m => m.Layer).First()).ToList();
             if (costumes.Count == 0 && stages.Count == 0 && colors.Count == 0 && music.Count == 0)
                 throw new InvalidDataException("it has no costume, color, stage or music files EX More Stuff can use (menus, HUDs, announcers and other sounds aren't supported)");
+            // a skin that changes its fighter's moves too: its costumes don't go in (SkinImport.ChangesMoves)
+            string moves = costumes.Count > 0 ? SkinImport.ChangesMoves(files.Select(f => f.Key)) : null;
+            if (moves != null && stages.Count == 0 && colors.Count == 0 && music.Count == 0)
+                throw new InvalidDataException(moves + ", for every costume (online that's a desync), and its model may need them: it can't go in as a costume");
             // its picture: the mod page's, else the first picture in it that isn't a costume's or stage's own
             if (picture == null)
                 picture = files.Where(f => Regex.IsMatch(f.Key, @"\.(png|jpe?g)$", RegexOptions.IgnoreCase) && !CostumePicture.IsMatch(NameOf(f.Key))).Select(f => f.Value).FirstOrDefault();
@@ -238,13 +276,23 @@ namespace ExMoreStuff
             if (clean.Length > 60) clean = clean.Substring(0, 60).Trim();
             string credit = (!string.IsNullOrEmpty(author) ? " by " + author : "") + where;
             var result = new Result();
+            if (moves != null)
+            {
+                result.Problems.Add(string.Join(", ", costumes.Select(c => Fighters.Name(c.Fighter)).Distinct()) + ": " + moves + ", so its costume can't go in");
+                costumes.Clear();
+            }
             foreach (var costume in costumes)
             {
+                if (dock != null)
+                {
+                    string before = BuiltBefore(game, AppFolders.FighterPackages(costume.Fighter), clean + " - " + costume.Fighter + " ", "", it => it.IsCostume && it.Fighter == costume.Fighter);
+                    if (before != null) { DockAgain(before, dock, result, Fighters.Name(costume.Fighter) + " " + Installer.Package(before).Slot.ToString("D2")); continue; }
+                }
                 var records = Installer.Load(game).Concat(Installer.Removed(game)).ToList();
                 string itemId = id + ":" + costume.Fighter + costume.Number.ToString("D2");
                 Installed again = records.FirstOrDefault(r => r.Item.Id == itemId);
                 int slot = again != null ? again.Item.Slot : SkinImport.FreeSlot(game, costume.Fighter);
-                if (slot == 0) { result.Problems.Add(Fighters.Name(costume.Fighter) + ": no free slot left in " + Catalog.FirstCustomCostume + "-" + Catalog.LastPersonal); continue; }
+                if (slot == 0) { result.Problems.Add(SkinImport.NoRoom(costume.Fighter)); continue; }
                 string zip = Path.Combine(AppFolders.FighterPackages(costume.Fighter), clean + " - " + costume.Fighter + " " + slot.ToString("D2") + ".zip");
                 var item = new Item
                 {
@@ -256,11 +304,12 @@ namespace ExMoreStuff
                 try
                 {
                     SkinImport.Build(game, costume, slot, picture, zip);
-                    Installer.InstallPackage(game, item, zip, "file");
+                    if (dock != null) dock(zip); else Installer.InstallPackage(game, item, zip, "file");
                     result.Into.Add(Fighters.Name(costume.Fighter) + " " + slot.ToString("D2"));
                 }
                 catch (Exception ex) { result.Problems.Add(Fighters.Name(costume.Fighter) + ": " + ex.Message); }
             }
+            if (dock != null && music.Count > 0) { result.Problems.Add("its music isn't docked (music goes straight into the game): add it without docking for that"); music.Clear(); }
             foreach (var m in music)
             {
                 string place = m.Slot.Name + (m.Slot.Round > 1 ? " round " + m.Slot.Round : "");
@@ -302,13 +351,18 @@ namespace ExMoreStuff
                     byte[] png = color.Png ?? Png(picture);
                     if (png != null) package.Add(new KeyValuePair<string, byte[]>(item.Prefix + ".png", png));
                     Write(package, zip);
-                    Installer.InstallPackage(game, item, zip, "file");
+                    if (dock != null) dock(zip); else Installer.InstallPackage(game, item, zip, "file");
                     result.Into.Add(into);
                 }
                 catch (Exception ex) { result.Problems.Add(color.Describe + ": " + ex.Message); }
             }
             foreach (var stage in stages)
             {
+                if (dock != null)
+                {
+                    string before = BuiltBefore(game, AppFolders.StagePackages, clean + " - ", stages.Count > 1 ? " " + stage.Code : "", it => it.IsStage);
+                    if (before != null) { DockAgain(before, dock, result, "stage " + Installer.Package(before).Code); continue; }
+                }
                 var records = Installer.Load(game).Concat(Installer.Removed(game)).ToList();
                 string itemId = id + ":STG_" + stage.Code + (stage.Folder != "" ? ":" + stage.Folder : "");
                 Installed again = records.FirstOrDefault(r => r.Item.Id == itemId);
@@ -331,7 +385,7 @@ namespace ExMoreStuff
                 try
                 {
                     BuildStage(game, stage, code, picture, zip);
-                    Installer.InstallPackage(game, item, zip, "file");
+                    if (dock != null) dock(zip); else Installer.InstallPackage(game, item, zip, "file");
                     result.Into.Add("stage " + code);
                 }
                 catch (Exception ex)

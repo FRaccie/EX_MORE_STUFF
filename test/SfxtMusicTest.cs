@@ -32,6 +32,10 @@ namespace ExMoreStuff
             Console.WriteLine("       decoded and mixed in {0:F1} s: {1:F1} s of audio", clock.Elapsed.TotalSeconds, ours.Length / 2.0 / rate);
             Check(rate == 48000 && ls == 1224000 && le == 4662401, "48 kHz, loop " + ls + " - " + le);
 
+            // the comparison with ffmpeg's decode needs its WAV, made once in a work folder (cleaned up since: then it's left out)
+            if (!File.Exists(args[1])) Console.WriteLine("  skip  the comparison with ffmpeg's decode: its WAV isn't there (" + args[1] + ")");
+            else
+            {
             float[] theirs; int trate, tch;
             Check(AudioFile.TryReadWav(File.ReadAllBytes(args[1]), out theirs, out trate, out tch) && trate == 48000 && tch == 2, "ffmpeg's WAV read");
             // the lag that lines them up best (ffmpeg keeps the encoder delay at the start, which this takes off, as
@@ -76,6 +80,7 @@ namespace ExMoreStuff
                 AudioFile.WriteWav(args[2], pcm, 2, 48000);
             }
             Check(snr > 40, "the same audio as ffmpeg's (over 40 dB)");
+            }
 
             Song song = SfxtMusic.Load(msr, 0);
             Check(song.LoopStart == (int)(1224000L * 44100 / 48000) && song.LoopEnd > song.LoopStart && song.LoopEnd <= song.Frames,

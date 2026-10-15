@@ -10,7 +10,8 @@ namespace ExMoreStuff
 {
     // Advanced > Old mods: mods put in the game's patch folders by hand (ModScan), and "Import old mods", which brings the
     // stages and costumes among them into EX More Stuff: each becomes a package of the player's in one of their own seats
-    // (kept in Mods\), and its loose files go to the Recycle Bin. Other files are only listed.
+    // (kept in Mods\), and its original loose files move to Mods\Legacy mods backup (AppFolders.BackUpOldMod; user 2026-10-14:
+    // "placed somewhere safe"; they went to the Recycle Bin before). Other files are only listed.
     class OldModsPanel : Clear
     {
         string game;
@@ -23,6 +24,7 @@ namespace ExMoreStuff
 
         public event Action Changed;          // packages were added (the window reads its lists again)
         public event Action<bool> Working;    // an import started or ended (the rest of the window waits)
+        public Func<Task> BeforeImport;       // the window's first-time PC check (PerfTest), before anything goes in
 
         public OldModsPanel()
         {
@@ -72,18 +74,18 @@ namespace ExMoreStuff
             int stages = mods.Count(m => m.Kind == ModScan.Kind.Stage), costumes = mods.Count(m => m.Kind == ModScan.Kind.Costume);
             var controls = new List<Control>
             {
-                new Heading("Old mods", width),
-                ShadowLabel.Note("Mods put in the game's folders by hand, not by EX More Stuff. Import old mods brings the stages and costumes among them in: each " +
-                                 "becomes a package of yours in one of your own seats (stages U01 up, costumes " + Catalog.LastPersonal + " down), kept in the Mods folder, " +
-                                 "and its loose files go to the Recycle Bin. You can have them keep showing where they are now. Other files stay as they are.", width),
+                new Heading("Import Your Legacy Mods", width),   // user 2026-10-14 (was "Old mods")
+                ShadowLabel.Note("Manage your installed mods with EX More Stuff instead of loose files over the game's own. Each stage and costume becomes a package " +
+                                 "of yours in its own slot, and its original files are moved to Mods\\Legacy mods backup. To put one over a game stage or costume " +
+                                 "again, pick it on the Stages page or that fighter's page. Other files (HUD, sounds, moves) stay as they are.", width),
             };
             import.Enabled = stages + costumes > 0;
-            import.Text = stages + costumes > 0 ? "Import old mods (" + (stages + costumes) + ")" : "Import old mods";
+            import.Text = stages + costumes > 0 ? "Import legacy mods (" + (stages + costumes) + ")" : "Import legacy mods";
             import.Width = TextRenderer.MeasureText(import.Text, import.Font).Width + 36;
             controls.Add(import);
             status.Width = width - 16;
             controls.Add(status);
-            if (mods.Count == 0 && !scanning) controls.Add(ShadowLabel.Note("No old mods found: everything in the game's folders is the game's own or EX More Stuff's.", width));
+            if (mods.Count == 0 && !scanning) controls.Add(ShadowLabel.Note("No legacy mods found: everything in the game's folders is the game's own or EX More Stuff's.", width));
             foreach (var m in mods)
                 controls.Add(new OldModRow
                 {
@@ -104,20 +106,17 @@ namespace ExMoreStuff
             var importable = found.Where(m => m.CanImport).ToList();
             if (importable.Count == 0) return;
             if (Game.IsRunning()) { Say("Close the game first, then import", true); return; }
-            int stages = importable.Count(m => m.Kind == ModScan.Kind.Stage), costumes = importable.Count - stages;
-            string what = (stages > 0 ? stages + " stage" + (stages > 1 ? "s" : "") : "") + (stages > 0 && costumes > 0 ? " and " : "") +
-                          (costumes > 0 ? costumes + " costume" + (costumes > 1 ? "s" : "") : "");
-            var answer = MessageBox.Show(FindForm(), "Import " + what + " into EX More Stuff?\n\nEach becomes a package of yours in one of your own seats, kept in the Mods folder; " +
-                    "its loose files go to the Recycle Bin.\n\nKeep them showing where they are now?\n\nYes: they keep playing in place of the game's stages and costumes " +
-                    "(as replacements, which you can change on the Stages page and each fighter's page).\nNo: the game's own come back, and yours wait in your own seats.",
-                    "EX More Stuff", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-            if (answer == DialogResult.Cancel) return;
-            bool keep = answer == DialogResult.Yes;
+            // every mod that moves listed, then Replaced Content or Only As Bonus Content (LegacyDialog, user 2026-10-14)
+            LegacyDialog.Choice how;
+            using (var ask = new LegacyDialog(importable.Select(m => m.What).ToList())) { ask.ShowDialog(FindForm()); how = ask.Picked; }
+            if (how == LegacyDialog.Choice.Cancel) return;
+            if (BeforeImport != null) await BeforeImport();
+            bool keep = how == LegacyDialog.Choice.Replaced;
             var done = new List<string>();
             var problems = new List<string>();
             string g = game;
-            Action<string> recycle = path => Invoke((Action)(() =>
-                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin)));
+            Action<string> backUp = path => AppFolders.BackUpOldMod(g, path.Substring(g.TrimEnd('\\').Length + 1));   // safe in Mods\Legacy mods backup
+            var before = Weight.Keys(g);
             Busy(true);
             try
             {
@@ -125,16 +124,20 @@ namespace ExMoreStuff
                 foreach (var m in importable)
                 {
                     Say(string.Format("Importing {0} ({1}/{2})...", m.What, ++step, importable.Count));
-                    try { string where = await Task.Run(() => ModScan.Import(g, m, keep, recycle)); done.Add(m.What + " -> " + where); }
+                    try { string where = await Task.Run(() => ModScan.Import(g, m, keep, backUp)); done.Add(m.What + " -> " + where); }
                     catch (Exception ex) { problems.Add(m.What + ": " + ex.Message); }
                 }
             }
             finally { Busy(false); }
             var changed = Changed;
             if (changed != null) changed(); else Fill();   // the window's reload lists them again
+            var notes = Weight.New(g, before);   // size warnings for what came in: they inform, nothing was stopped
+            string noted = notes.Count > 0 ? "\n\nNote: " + string.Join("\n\n", notes) : "";
             if (problems.Count > 0)
-                MessageBox.Show(FindForm(), (done.Count > 0 ? done.Count + " imported.\n\n" : "") + "Some couldn't be imported:\n\n" + string.Join("\n", problems),
+                MessageBox.Show(FindForm(), (done.Count > 0 ? done.Count + " imported.\n\n" : "") + "Some couldn't be imported:\n\n" + string.Join("\n", problems) + noted,
                     "EX More Stuff", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            else if (notes.Count > 0)
+                MessageBox.Show(FindForm(), done.Count + " imported." + noted, "EX More Stuff", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Say(done.Count + " imported" + (keep ? ", showing where they were" : "") + (problems.Count > 0 ? "; " + problems.Count + " couldn't be" : ""), problems.Count > 0);
         }
 
@@ -150,6 +153,73 @@ namespace ExMoreStuff
         {
             status.Text = text;
             status.ForeColor = problem ? Theme.Warning : Theme.Text;
+        }
+    }
+
+    // The import question (user 2026-10-14, their words): the mods that move, that their files go to EX More Stuff's
+    // folders, then Replaced Content (they keep playing in place of the game's) or Only As Bonus Content (the game's own
+    // come back, theirs are extra picks in rollback games). Either way they're imported the same.
+    class LegacyDialog : Form
+    {
+        public enum Choice { Cancel, Replaced, Bonus }
+
+        public Choice Picked { get; private set; }
+
+        public LegacyDialog(IList<string> mods)
+        {
+            Text = "Import Your Legacy Mods";
+            Font = Theme.Font(9f);
+            BackColor = Theme.Base;
+            ForeColor = Theme.Text;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = MinimizeBox = false;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            const int width = 600, pad = 22;
+            const int shown = 10;   // more than this: "and N more"
+            string list = string.Join("\n", mods.Take(shown).Select(m => "    " + m)) + (mods.Count > shown ? "\n    and " + (mods.Count - shown) + " more" : "");
+            string moved = "Their files will be moved to EX More Stuff's folders: each becomes a package in Mods, and its original files go to Mods\\Legacy mods backup.";
+            Func<string, Font, int, int> tall = (t, f, w) => TextRenderer.MeasureText(t, f, new Size(w, 0), TextFormatFlags.WordBreak).Height;
+            int y = 18;
+            var heading = new Label { Text = "Manage your legacy DLC as...", AutoSize = false, BackColor = Color.Transparent, Font = Theme.Bold(13f), ForeColor = Theme.Text,
+                                      Bounds = new Rectangle(pad, y, width - 2 * pad, 30) };
+            y += 38;
+            var names = new Label { Text = list, AutoSize = false, BackColor = Color.Transparent, Font = Theme.Font(9.5f), ForeColor = Theme.Text,
+                                    Bounds = new Rectangle(pad, y, width - 2 * pad, tall(list, Theme.Font(9.5f), width - 2 * pad) + 4) };
+            y = names.Bottom + 8;
+            var move = new Label { Text = moved, AutoSize = false, BackColor = Color.Transparent, Font = Theme.Font(9.5f), ForeColor = Theme.Muted,
+                                   Bounds = new Rectangle(pad, y, width - 2 * pad, tall(moved, Theme.Font(9.5f), width - 2 * pad) + 4) };
+            y = move.Bottom + 18;
+            // the two choices side by side, each with what it means under it
+            int column = (width - 2 * pad - 16) / 2;
+            var replaced = new FlatButton("Replaced Content", true) { Width = column, Location = new Point(pad, y) };
+            var bonus = new FlatButton("Only As Bonus Content") { Width = column, Location = new Point(pad + column + 16, y) };
+            const string replacedText = "Your content replaces original SF4 Costumes and Stages", bonusText = "Your content becomes bonus items during rollback games.";   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
+            int under = Math.Max(tall(replacedText, Theme.Font(9f), column), tall(bonusText, Theme.Font(9f), column)) + 4;
+            var replacedAbout = new Label { Text = replacedText, AutoSize = false, BackColor = Color.Transparent, Font = Theme.Font(9f), ForeColor = Theme.Muted,
+                                            TextAlign = ContentAlignment.TopCenter, Bounds = new Rectangle(pad, replaced.Bottom + 6, column, under) };
+            var bonusAbout = new Label { Text = bonusText, AutoSize = false, BackColor = Color.Transparent, Font = Theme.Font(9f), ForeColor = Theme.Muted,
+                                         TextAlign = ContentAlignment.TopCenter, Bounds = new Rectangle(bonus.Left, bonus.Bottom + 6, column, under) };
+            y = replacedAbout.Bottom + 14;
+            const string anyTime = "Your content can be set to Replaced or not at any time with EXMS";
+            var note = new Label { Text = anyTime, AutoSize = false, BackColor = Color.Transparent, Font = Theme.Font(9f), ForeColor = Theme.Muted,
+                                   TextAlign = ContentAlignment.TopCenter, Bounds = new Rectangle(pad, y, width - 2 * pad, tall(anyTime, Theme.Font(9f), width - 2 * pad) + 4) };
+            y = note.Bottom + 14;
+            var cancel = new FlatButton("Cancel");
+            cancel.Location = new Point(width - pad - cancel.Width, y);
+            ClientSize = new Size(width, cancel.Bottom + 18);
+            replaced.Click += (s, e) => { Picked = Choice.Replaced; DialogResult = DialogResult.OK; };
+            bonus.Click += (s, e) => { Picked = Choice.Bonus; DialogResult = DialogResult.OK; };
+            cancel.Click += (s, e) => { Picked = Choice.Cancel; DialogResult = DialogResult.Cancel; };
+            Controls.AddRange(new Control[] { heading, names, move, replaced, bonus, replacedAbout, bonusAbout, note, cancel });
+        }
+
+        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Theme.DarkTitleBar(Handle); }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keys)
+        {
+            if (keys == Keys.Escape) { Picked = Choice.Cancel; DialogResult = DialogResult.Cancel; return true; }
+            return base.ProcessCmdKey(ref msg, keys);
         }
     }
 

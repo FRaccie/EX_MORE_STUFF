@@ -113,7 +113,7 @@ namespace ExMoreStuff
                                        What = Fighters.Name(fighter) + (costume < Catalog.FirstCustomCostume ? "'s " + CostumeGrid.CostumeName(costume) + " (the game's costume, replaced)"
                                                                                                               : " " + costume.ToString("D2") + " (a costume put in by hand)") };
                 }
-                if (Fighters.IsCode(fighter)) return new Found { Kind = Kind.Other, Key = "chara:" + fighter, What = Fighters.Name(fighter) + ": other files (moves, effects ...)" };
+                if (Fighters.IsCode(fighter)) return new Found { Kind = Kind.Other, Key = "chara:" + fighter, What = Fighters.Name(fighter) + ": other files (moves, effects, voice ...)" };
             }
             if (folder.Equals(Path.Combine("battle", "sound", "bgm"), StringComparison.OrdinalIgnoreCase) && name.EndsWith(".csb", StringComparison.OrdinalIgnoreCase))
             {
@@ -125,7 +125,7 @@ namespace ExMoreStuff
 
         /// <summary>Brings a found stage or costume into EX More Stuff: its files made into a package of the player's in one of
         /// their own seats (a stage U01 up, a costume 84 down), its loose files taken out of the game folder by `discard`
-        /// (the Recycle Bin), the package installed. `keep`: what it replaced plays as it again (a stage or costume
+        /// (into Mods\Legacy mods backup), the package installed. `keep`: what it replaced plays as it again (a stage or costume
         /// replacement, switched on the Stages page or the fighter's page; if that can't be done, the import still stands and
         /// the answer says why). Returns where it went ("stage U01", "Abel 84").</summary>
         public static string Import(string game, Found found, bool keep, Action<string> discard)
@@ -152,10 +152,13 @@ namespace ExMoreStuff
             }
             else
             {
+                // the fighter's voice put in by hand goes into its package too (user 2026-10-13: part of the costume), and stays
+                // where it is: it's the whole fighter's
+                files.AddRange(ModdedVoices(game, found.Fighter).Select(f => new KeyValuePair<string, byte[]>("old/" + Path.GetFileName(f), File.ReadAllBytes(Path.Combine(game, f)))));
                 var costume = SkinImport.Find(files).FirstOrDefault();
                 if (costume == null) throw new InvalidDataException("no model or color of its own in it");
                 int slot = SkinImport.FreeSlot(game, found.Fighter);
-                if (slot == 0) throw new InvalidOperationException(Fighters.Name(found.Fighter) + " has no free slot left");
+                if (slot == 0) throw new InvalidOperationException(SkinImport.NoRoom(found.Fighter));
                 string name = (found.Costume < Catalog.FirstCustomCostume ? CostumeGrid.CostumeName(found.Costume) : "Costume " + found.Costume.ToString("D2")) + " mod";
                 string folder = AppFolders.FighterPackages(found.Fighter);
                 Directory.CreateDirectory(folder);
@@ -168,6 +171,24 @@ namespace ExMoreStuff
                 if (keep && found.Costume < Catalog.FirstCustomCostume) where += KeptShowing(() => CostumeSwaps.Replace(game, found.Fighter, found.Costume, slot));
             }
             return where;
+        }
+
+        // a fighter's voice files put in by hand (<F>_E.csb, <F>_J.csb in a patch folder, not the game's own or EX More Stuff's):
+        // the last patch folder's when several have one, as the game loads it. Files in the game's own folders are left alone.
+        static List<string> ModdedVoices(string game, string fighter)
+        {
+            var ours = Ours(game);
+            var known = Official();
+            var found = new Dictionary<string, string>();
+            foreach (string folder in PatchFolders)
+                foreach (string language in new[] { "E", "J" })
+                {
+                    string relative = Path.Combine(folder, "battle", "chara", fighter, fighter + "_" + language + ".csb"), path = Path.Combine(game, relative);
+                    long size;
+                    if (!File.Exists(path) || ours.Contains(relative) || (known.TryGetValue(relative, out size) && size == new FileInfo(path).Length)) continue;
+                    found[language] = relative;
+                }
+            return found.Values.ToList();
         }
 
         // the replacement that keeps an imported mod showing where it was: "" when made, else why not

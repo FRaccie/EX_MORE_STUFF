@@ -28,13 +28,31 @@ namespace ExMoreStuff
                   "its 8 files, each with its link, MD5, scan result and contents");
             Check(SharedCodes.Holders(mods).ContainsKey("BLK 08") && SharedCodes.HeldBy.ContainsKey("stage B01"), "seats from it: Blanka 08, stage B01");
 
+            Check(!builtIn.Contains("\"checking\"") ? mods.All(m => m.Files.All(f => !f.Checking)) : true, "a list from before \"checking\" was kept: nothing taken as still being checked");
+
             Console.WriteLine("Saved and read back");
             Directory.CreateDirectory(args[0]);
             string path = Path.Combine(args[0], "kept.json");
+            var fresh = hado.Files.Last();
+            fresh.Clean = false; fresh.Checking = true;   // a new upload GameBanana is still checking (user 2026-10-13)
             GameBanana.Save(mods, path);
             var again = read(File.ReadAllText(path));
             Check(again.Count == mods.Count && again.Zip(mods, (a, b) => a.Id == b.Id && a.Name == b.Name && a.Files.Count == b.Files.Count &&
                   a.Files.Zip(b.Files, (x, y) => x.Download == y.Download && x.Md5 == y.Md5 && x.Contents.SequenceEqual(y.Contents)).All(z => z)).All(z => z), "the same mods, files, links and contents");
+            var back = again.First(m => m.Id == 680656).Files.Last();
+            Check(back.Checking && !back.Clean && again.First(m => m.Id == 680656).Files.Count(f => f.Checking) == 1, "a file GameBanana is still checking reads back as such");
+
+            Console.WriteLine("Collections kept with the list (user 2026-10-14)");
+            Check(GameBanana.Collections.Count == 0, "none in a list kept before collections were read, or none that keeps the rule");
+            string withOne = File.ReadAllText(path).Replace("\"collections\":[]",
+                "\"collections\":[{\"id\":900001,\"name\":\"SFxT Tekken Crossovers\",\"owner\":\"oops_whats\",\"ownerId\":123,\"mods\":[680656,726996]}]");
+            Check(withOne.Contains("900001"), "a list with one collection");
+            read(withOne);
+            var c = GameBanana.Collections.FirstOrDefault();
+            Check(c != null && c.Name == "SFxT Tekken Crossovers" && c.Owner == "oops_whats" && c.OwnerId == 123 && c.Mods.SequenceEqual(new long[] { 680656, 726996 }) &&
+                  c.Page == "https://gamebanana.com/collections/900001", "its collection read back: name, maker, mods, page");
+            GameBanana.Save(again, path);
+            Check(File.ReadAllText(path).Contains("\"name\":\"SFxT Tekken Crossovers\""), "and saved again with the list");
             Directory.Delete(args[0], true);
             Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");
             Environment.Exit(failures == 0 ? 0 : 1);

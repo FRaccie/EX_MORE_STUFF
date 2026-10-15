@@ -129,9 +129,24 @@ namespace ExMoreStuff
             if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
             string problem = Problem(game, fighter, costume, source);
             if (problem != null) throw new InvalidOperationException(problem);
+            Swap(game, fighter, costume, source, CostumeFiles(game, fighter, source));
+        }
+
+        /// <summary>Costume `costume` plays as a costume's files from elsewhere (`from`, by what follows the prefix as
+        /// CostumeFiles gives them: a docked file's, unpacked for its color pictures), noted as `source`.</summary>
+        public static void ReplaceWith(string game, string fighter, int costume, int source, Dictionary<string, string> from)
+        {
+            if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
+            if (costume >= Catalog.FirstCustomCostume || !GameCostumes(game, fighter).Contains(costume)) throw new InvalidOperationException("costume " + costume + " isn't one of the game's here");
+            if (!from.ContainsKey(".obj.emo") || !from.ContainsKey(".nml.emb")) throw new InvalidOperationException("its model files weren't found");
+            if (Colors(from).Count == 0) throw new InvalidOperationException("it has no colors");
+            Swap(game, fighter, costume, source, from);
+        }
+
+        static void Swap(string game, string fighter, int costume, int source, Dictionary<string, string> from)
+        {
             var list = Load(game);
             if (list.Any(s => s.Fighter == fighter && s.Costume == costume)) throw new InvalidOperationException("it is already replaced");
-            var from = CostumeFiles(game, fighter, source);
             var own = CostumeFiles(game, fighter, costume);
             var colors = Colors(from);
             string prefix = fighter + "_" + costume.ToString("D2");

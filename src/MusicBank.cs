@@ -619,13 +619,12 @@ namespace ExMoreStuff
             return new MusicSlot { Code = code, Round = round };
         }
 
-        /// <summary>Puts a built bank in the patch folder for `slot` (replacing an earlier song of ours there).</summary>
+        /// <summary>Puts a built bank in the patch folder for `slot` (replacing an earlier song of ours there). Over a
+        /// stage package's own music too (the Music page warns first): that file is moved aside like a game file, and
+        /// comes back when the package's files go (Installer.Delete gives the song back first).</summary>
         public static void Install(string game, MusicSlot slot, byte[] bank, InstalledSong about)
         {
             if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
-            string owner = PackageOwning(game, slot);
-            if (owner != null)
-                throw new InvalidOperationException(slot.File + " is the music of " + owner + ", installed from its package; save the song as .csb and put it in that package instead");
             var list = Load(game);
             if (list.ContainsKey(slot.File))
             {
@@ -723,6 +722,85 @@ namespace ExMoreStuff
             list.Remove(slot.File);
             Save(game, list);
             return problem;
+        }
+    }
+
+    // Songs put in a docked stage's file from the Music page (user 2026-10-14: "A docked stage cant have its music
+    // edited"): the bank goes into its zip under the slot's file name (BGM_U05.csb, BGM_U052.csb, BGM_U053.csb), never
+    // into the game, as a docked file's other edits do. What was put there is noted in docked_music.json beside the program
+    // (by zip and file, with the bank's SHA-256: a file changed since reads as the docked file's own music).
+    static class DockedMusic
+    {
+        static string ListPath { get { return AppFolders.DataFile("docked_music.json"); } }
+
+        static string Key(string zip, string file) { return Path.GetFullPath(zip).ToLowerInvariant() + "|" + file.ToUpperInvariant(); }
+
+        static string Sha256(byte[] data)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+        }
+
+        /// <summary>The docked file's music for `file` (BGM_U05.csb), or null.</summary>
+        public static byte[] Bank(string zip, string file)
+        {
+            using (var archive = System.IO.Compression.ZipFile.OpenRead(zip))
+            {
+                var entry = archive.Entries.FirstOrDefault(e => string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase));
+                if (entry == null) return null;
+                using (Stream s = entry.Open())
+                using (var data = new MemoryStream()) { s.CopyTo(data); return data.ToArray(); }
+            }
+        }
+
+        /// <summary>The song put there from the Music page, while the file is still what was put in; else null.</summary>
+        public static InstalledSong Song(string zip, string file)
+        {
+            InstalledSong song;
+            if (!Load().TryGetValue(Key(zip, file), out song)) return null;
+            byte[] bank = Bank(zip, file);
+            return bank != null && Sha256(bank) == song.Sha256 ? song : null;
+        }
+
+        public static void Put(string zip, string file, byte[] bank, InstalledSong about)
+        {
+            using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Update))
+            {
+                foreach (var old in archive.Entries.Where(e => string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase)).ToList()) old.Delete();
+                using (Stream s = archive.CreateEntry(file).Open()) s.Write(bank, 0, bank.Length);
+            }
+            about.File = file;
+            about.Sha256 = Sha256(bank);
+            var list = Load();
+            list[Key(zip, file)] = about;
+            Save(list);
+        }
+
+        /// <summary>Its music for `file` out of the docked file; false when there was none.</summary>
+        public static bool TakeOut(string zip, string file)
+        {
+            bool had = false;
+            using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Update))
+                foreach (var old in archive.Entries.Where(e => string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase)).ToList()) { old.Delete(); had = true; }
+            var list = Load();
+            if (list.Remove(Key(zip, file))) Save(list);
+            return had;
+        }
+
+        static Dictionary<string, InstalledSong> Load()
+        {
+            try
+            {
+                if (!File.Exists(ListPath)) return new Dictionary<string, InstalledSong>();
+                return new JavaScriptSerializer().Deserialize<Dictionary<string, InstalledSong>>(File.ReadAllText(ListPath)) ?? new Dictionary<string, InstalledSong>();
+            }
+            catch (Exception) { return new Dictionary<string, InstalledSong>(); }
+        }
+
+        static void Save(Dictionary<string, InstalledSong> list)
+        {
+            if (list.Count == 0) { if (File.Exists(ListPath)) File.Delete(ListPath); return; }
+            Directory.CreateDirectory(Path.GetDirectoryName(ListPath));
+            File.WriteAllText(ListPath, new JavaScriptSerializer().Serialize(list));
         }
     }
 }

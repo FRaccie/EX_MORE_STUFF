@@ -35,6 +35,22 @@ namespace ExMoreStuff
         public static string FighterPackages(string fighter) { return Path.Combine(Mods, "Characters", FolderName(Fighters.Name(fighter))); }
         public static string PackagesFor(Item item) { return item.IsStage || string.IsNullOrEmpty(item.Fighter) ? StagePackages : FighterPackages(item.Fighter); }
 
+        /// <summary>Where Old mods' import puts a mod's original loose files (user 2026-10-14: "placed somewhere safe"): a
+        /// folder per day, the game's folders kept inside (Mods\Legacy mods backup\2026-10-14\patch_ae2_tu3\battle\stage\...),
+        /// so copying a day's folder into the game folder puts them back.</summary>
+        public static string OldModsBackup { get { return Path.Combine(Mods, "Legacy mods backup"); } }
+
+        /// <summary>Moves a file of the game folder (`relative` inside it) into today's Legacy mods backup, its folders kept; a
+        /// file already there with that name keeps it, and this one gets " (2)" and up. Returns where it went.</summary>
+        public static string BackUpOldMod(string game, string relative)
+        {
+            string folder = Path.Combine(OldModsBackup, DateTime.Now.ToString("yyyy-MM-dd"), Path.GetDirectoryName(relative) ?? "");
+            Directory.CreateDirectory(folder);
+            string to = PlaceFor(folder, Path.GetFileName(relative), null);
+            File.Move(Path.Combine(game, relative), to);
+            return to;
+        }
+
         static string FolderName(string name)
         {
             foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
