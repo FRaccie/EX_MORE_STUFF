@@ -115,6 +115,7 @@ namespace ExMoreStuff
                     }
                 }
             string temp = zipPath + ".tmp";
+            if (File.Exists(temp)) File.Delete(temp);   // left by a write a crash stopped
             using (ZipArchive zip = ZipFile.Open(temp, ZipArchiveMode.Create))
                 foreach (var file in files)
                 {

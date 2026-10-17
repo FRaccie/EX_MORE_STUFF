@@ -81,6 +81,16 @@ namespace ExMoreStuff
             Check(result.Into.SequenceEqual(new[] { "in place of Festival at the Old Temple" }) && Overrides.Load(game).Count == 2 &&
                   Replacements.Load(game).Single().Source == "override:file:abc:override", "it goes in as an override too: " + string.Join(", ", result.Into));
 
+            Console.WriteLine("Uninstall (Browse Mods' Uninstall, user 2026-10-17)");
+            string fileZip = Overrides.Load(game).Single(o => o.Id == "file:abc:override").Package;
+            Overrides.Uninstall(game, "file:abc:override");
+            Check(!Replacements.Load(game).Any() && !File.Exists(patchFile), "the game's own KOR back, the override's files out of the game");
+            Check(Overrides.Load(game).Count == 1 && Overrides.Load(game)[0].Id == "gamebanana:1:override", "off the list, the other stays");
+            Check(!File.Exists(fileZip) && File.Exists(zip), "its zip to the Recycle Bin, the other's kept");
+            Overrides.Uninstall(game, "gamebanana:1:override");
+            Check(Overrides.Load(game).Count == 0 && !File.Exists(zip) && !File.Exists(Path.Combine(Game.PatchFolder(game), "ex_more_stuff_overrides.json")),
+                  "the last one out: the list file goes too");
+
             Console.WriteLine("Problems");
             var two = new List<KeyValuePair<string, byte[]>>(mod) { new KeyValuePair<string, byte[]>("pack/STG_DET.emz", trn(".emz")), new KeyValuePair<string, byte[]>("pack/STG_DET.tex.emz", trn(".tex.emz")) };
             string problem = null;

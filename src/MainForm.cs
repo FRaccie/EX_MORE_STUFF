@@ -47,7 +47,7 @@ namespace ExMoreStuff
         readonly ScrollList costumeCards = new ScrollList { Dock = DockStyle.Fill, Padding = new Padding(0, 6, 0, 0) };
         readonly ScrollList stagesPage = new ScrollList { Dock = DockStyle.Fill, Visible = false };
         // Music: a tab of its own, coming soon (user 2026-10-12); the music tools are in Advanced > Music meanwhile
-        readonly ScrollList soonPage = new ScrollList { Dock = DockStyle.Fill, Visible = false };
+        readonly MusicTab musicTabPage = new MusicTab { Dock = DockStyle.Fill, Visible = false };   // the Music tab (Advanced > Music is the song editor)
         // About: the credits in a small card at the top, leaving the background art in full view.
         readonly Clear aboutPage = new Clear { Dock = DockStyle.Fill, Visible = false };
         // Advanced: tools most players never need, each behind a card (each opens with a way back).
@@ -148,7 +148,7 @@ namespace ExMoreStuff
             footer.Dock = DockStyle.Bottom;
             progress.Bounds = new Rectangle(0, 0, ClientSize.Width, 3);
             // the buttons a little smaller than elsewhere (same text size), so three fit beside the status
-            foreach (FlatButton b in new[] { refresh, disableAll, apply }) b.Size = new Size(TextRenderer.MeasureText(b.Text, b.Font).Width + 24, 32);
+            foreach (FlatButton b in new[] { refresh, disableAll, apply }) b.Size = new Size(TextRenderer.MeasureText(b.Text, b.Font).Width + 24, 32);   // (Restore previous fits in Disable everything's width)
             apply.Location = new Point(ClientSize.Width - apply.Width - 18, 19);
             disableAll.Location = new Point(apply.Left - disableAll.Width - 8, 19);
             refresh.Location = new Point(disableAll.Left - refresh.Width - 8, 19);
@@ -160,7 +160,7 @@ namespace ExMoreStuff
             footer.Controls.AddRange(new Control[] { progress, status, gameLabel, change, folderButton, refresh, disableAll, apply });
             refresh.Click += async (s, e) => await RefreshAll();
             communityPage.RefreshAll = RefreshAll;   // Browse Mods' own Refresh does the same
-            disableAll.Click += (s, e) => DisableEverything();
+            disableAll.Click += async (s, e) => { if (Previous() != null) await RestorePrevious(); else DisableEverything(); };   // or Restore previous
             apply.Click += async (s, e) => await Apply();
 
             // A fighter's costumes: back, name, cards.
@@ -199,20 +199,36 @@ namespace ExMoreStuff
             communityPage.Working += PageWorking;
             packagesPage.Working += PageWorking;
             musicPage.Working += PageWorking;
+            musicPage.Saved += () => musicTabPage.SetGame(game);   // a song saved on Advanced > Music: in Your songs on the Music tab at once (user 2026-10-17)
+            musicTabPage.Working += PageWorking;
+            musicTabPage.Changed += () => { musicPage.SetGame(game); storagePage.SetGame(game); communityPage.SetGame(game); };   // a song set or uninstalled on the Music tab (a song mod: Browse Mods offers it again)
             oldModsPage.Working += PageWorking;
             creationPage.Working += PageWorking;
             creationPage.Blocked = () => Pending() > 0 ? "apply or undo the other changes waiting first" : null;
             creationPage.Changed += key => { pictures.Remove(key); ReloadKeeping(null); };   // its card shows the new color 1
             oldModsPage.Changed += () => { ReloadKeeping(null); BeginInvoke((Action)(async () => await TestUntested())); };   // old mods brought in: the rest waiting for Apply stays
             communityPage.Working += busy => { if (!busy) BeginInvoke((Action)(async () => await TestUntested())); };
+            communityPage.FooterSays = SetStatus;
+            communityPage.UninstallMod = UninstallMod;   // an install's steps in the footer, its usual line back after
+            communityPage.Working += busy => { if (!busy) UpdateStatus(); };
             guidePage.Go += GuideGo;
             unlock.Tick += (s, e) => { unlock.Stop(); Lock(false); };
 
             var credits = new AboutCard(wordmark, typeof(MainForm).Assembly.GetName().Version.ToString());
             aboutPage.Controls.Add(credits);
-            aboutPage.Resize += (s, e) => credits.Location = new Point((aboutPage.Width - credits.Width) / 2, 8);
+            // 18+ mods off Browse Mods (user 2026-10-17: "In the about tab, default off, allow users to disable NSFW content from
+            // appearing, and only there")
+            var nsfw = new Toggle("Hide NSFW mods") { Checked = Settings.HideNsfw };
+            tips.SetToolTip(nsfw, "Mods their creators rated on GameBanana for sexual content or themes, nudity, fetish content, intense violence or blood and gore don't show on Browse Mods");
+            nsfw.CheckedChanged += (s, e) => { Settings.HideNsfw = nsfw.Checked; communityPage.NsfwChanged(); };
+            aboutPage.Controls.Add(nsfw);
+            aboutPage.Resize += (s, e) =>
+            {
+                credits.Location = new Point((aboutPage.Width - credits.Width) / 2, 8);
+                nsfw.Location = new Point((aboutPage.Width - nsfw.Width) / 2, credits.Bottom + 14);
+            };
 
-            content.Controls.AddRange(new Control[] { rosterPage, costumePage, stagesPage, soonPage, communityPage, advancedPage, musicView, packagesView, storageView, freeCodesView, oldModsView, creationView, guideView, aboutPage });
+            content.Controls.AddRange(new Control[] { rosterPage, costumePage, stagesPage, musicTabPage, communityPage, advancedPage, musicView, packagesView, storageView, freeCodesView, oldModsView, creationView, guideView, aboutPage });
             Controls.Add(content);
             Controls.Add(footer);
             Controls.Add(header);
@@ -240,9 +256,23 @@ namespace ExMoreStuff
             if (backdrop == null || backdrop.Size != ClientSize)
             {
                 if (backdrop != null) backdrop.Dispose();
+                if (musicBackdrop != null) { musicBackdrop.Dispose(); musicBackdrop = null; }
                 backdrop = Theme.Backdrop(art, ClientSize, header.Height, ClientSize.Height - footer.Height);
             }
-            e.Graphics.DrawImageUnscaled(backdrop, 0, 0);
+            e.Graphics.DrawImageUnscaled(musicTab.Selected ? MusicBackdrop() : backdrop, 0, 0);
+        }
+
+        // the Music tab's background: the art tinted blue between the header and the footer (user 2026-10-16)
+        Bitmap musicBackdrop;
+
+        Bitmap MusicBackdrop()
+        {
+            if (musicBackdrop != null) return musicBackdrop;
+            musicBackdrop = new Bitmap(backdrop);
+            using (Graphics g = Graphics.FromImage(musicBackdrop))
+            using (var blue = new SolidBrush(Color.FromArgb(110, 20, 70, 200)))
+                g.FillRectangle(blue, 0, header.Height, ClientSize.Width, ClientSize.Height - footer.Height - header.Height);
+            return musicBackdrop;
         }
 
         async Task Start()
@@ -255,6 +285,9 @@ namespace ExMoreStuff
             Settings.GameFolder = game;
             ShowGame();
             string unfinished = PerfTest.Recover(game);   // a performance test that stopped halfway: what it changed goes back
+            // half-written files a crash left (SafeFile: the real ones were never touched): cleared
+            SafeFile.CleanUp(Game.PatchFolder(game));
+            SafeFile.CleanUp(AppFolders.Root);
             if (unfinished != null) MessageBox.Show(this, unfinished, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             await AdoptPackages();
             await ForgetMissingPackages();
@@ -452,6 +485,7 @@ namespace ExMoreStuff
             communityTab.Selected = tab == communityTab;
             advancedTab.Selected = tab == advancedTab;
             aboutTab.Selected = tab == aboutTab;
+            Invalidate(true);   // the background: blue on the Music tab
             advancedPage.Visible = tab == advancedTab && openTool == null;
             // the Music page's list made again each time it opens: stages docked or added since show (user 2026-10-14: the stage
             // docked, then added, wasn't on it; it was made only at start); the song open and the row picked stay
@@ -466,7 +500,7 @@ namespace ExMoreStuff
             guideView.Visible = tab == advancedTab && openTool == "guide";
             if (!musicView.Visible) musicPage.StopPlaying();
             stagesPage.Visible = tab == stagesTab;
-            soonPage.Visible = tab == musicTab;
+            musicTabPage.Visible = tab == musicTab;
             communityPage.Visible = tab == communityTab;
             aboutPage.Visible = tab == aboutTab;
             rosterPage.Visible = tab == costumesTab && openFighter == null;
@@ -666,10 +700,12 @@ namespace ExMoreStuff
             UpdateStatus();
         }
 
-        // A fighter's tile bubbles, as currently chosen: switched off (grey), on from GameBanana (green), on and added by the player (blue).
+        // A fighter's tile bubbles, as currently chosen: switched off (grey), on from GameBanana (green), on and added by the player (blue),
+        // costumes only; extra colors switched on (pink; user 2026-10-17: "a pink bubble number ... how many colors you have extra").
         void Count(FighterTile tile, string code)
         {
-            var costumes = AllItems().Where(i => !i.IsStage && i.Fighter == code).ToList();
+            tile.Colors = AllItems().Count(i => i.IsColor && i.Fighter == code && Wanted(i));
+            var costumes = AllItems().Where(i => !i.IsStage && !i.IsColor && i.Fighter == code).ToList();
             var on = costumes.Where(Wanted).ToList();
             tile.Active = on.Count(i => (i.Id ?? "").StartsWith("gamebanana:"));   // green: from GameBanana
             tile.Own = on.Count - tile.Active;                                       // blue: added by the player
@@ -730,6 +766,7 @@ namespace ExMoreStuff
             communityPage.SetGame(game);
             storagePage.SetGame(game);
             oldModsPage.SetGame(game);
+            musicTabPage.SetGame(game);
             UpdateStatus();
         }
 
@@ -793,12 +830,16 @@ namespace ExMoreStuff
             ShowFolder();
         }
 
+        CostumeGrid costumeGrid;   // the open fighter's game costumes (their colors and extra colors), or null
+        readonly Dictionary<string, ItemCard> colorCards = new Dictionary<string, ItemCard>();   // its extra colors' cards, by key
+
         void ShowCostumes(string code)
         {
+            costumeGrid = null;
             openFighter = code;
             costumeTitle.Text = Fighters.Name(code);
             ShowFolder();
-            var cards = AllItems().Where(i => !i.IsStage && i.Fighter == code).OrderBy(i => i.Slot).ThenBy(i => i.Color).Select(Card).ToList();
+            var cards = AllItems().Where(i => !i.IsStage && !i.IsColor && i.Fighter == code).OrderBy(i => i.Slot).Select(Card).ToList();
             int width = ClientSize.Width - content.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth - 16;
             if (cards.Count == 0) cards.Add(ShadowLabel.Note("No custom costumes for " + Fighters.Name(code) + " yet.", width));
             // the game's costumes, to have one play as the Original or one of the player's (only on this PC)
@@ -811,10 +852,38 @@ namespace ExMoreStuff
                 Image portrait;
                 portraits.TryGetValue(code, out portrait);
                 var grid = new CostumeGrid(width) { Costumes = gameCostumes, Fighter = code, Portrait = portrait };
+                costumeGrid = grid;
+                // each costume's extra colors under its colors, a switch over each (the same as its card's Use switch)
+                grid.Extras = n => AllItems().Where(i => i.IsColor && i.Fighter == code && i.Slot == n).OrderBy(i => i.Color).Select(i => new CostumeGrid.Extra
+                {
+                    Number = i.Color,
+                    Picture = () => { Image p; return pictures.TryGetValue(i.Key, out p) ? p : null; },
+                    On = () => Wanted(i),
+                    Switch = on =>
+                    {
+                        ItemCard card;
+                        if (colorCards.TryGetValue(i.Key, out card)) card.Use.Checked = on;   // its card's switch does the rest
+                        else { wanted[i.Key] = on; FighterTile tile; if (tiles.TryGetValue(code, out tile)) Count(tile, code); UpdateStatus(); }
+                    },
+                }).ToList();
                 grid.PlaysAs = n => { int s = Swap(wantedSwaps, CostumeSwaps.Key(code, n)); return s == 0 ? null : CostumeLabel(code, s); };
                 grid.Clicked += n => ChooseCostume(code, n);
                 grid.Lay();
                 cards.Add(grid);
+            }
+            // the extra colors (color packs) under the game's costumes, by the costume they're for ("Original: extra colors"),
+            // a card each with its picture, each switched on and off by itself (user 2026-10-17: "it should show them under the
+            // originals and i can disable any number of that packs colors")
+            colorCards.Clear();
+            foreach (var costume in AllItems().Where(i => i.IsColor && i.Fighter == code).GroupBy(i => i.Slot).OrderBy(g => g.Key))
+            {
+                cards.Add(new Heading(CostumeLabel(code, costume.Key) + ": extra colors", width));
+                foreach (Item color in costume.OrderBy(i => i.Color))
+                {
+                    Control card = Card(color);
+                    if (card is ItemCard) colorCards[color.Key] = (ItemCard)card;
+                    cards.Add(card);
+                }
             }
             Fill(costumeCards, cards);
             rosterPage.Visible = false;
@@ -924,7 +993,6 @@ namespace ExMoreStuff
             stageLine.AlignWith(costumeLine);
             // the tool cards two to a row, each half the page (user: "a lot of empty space on the right")
             foreach (ToolCard card in new[] { fromFile, oldMods, music, codes, space, codesFree, creation, guide }) card.Width = width / 2 - card.Margin.Horizontal - 1;
-            Fill(soonPage, new List<Control> { new Heading("Music", width), ShadowLabel.Note("Coming soon.", width) });
             var page = new List<Control> { new Heading("Advanced", width), note };
             page.AddRange(docked);
             page.AddRange(new Control[] { fromFile, oldMods, music, codes, space, codesFree, creation, guide,
@@ -985,7 +1053,7 @@ namespace ExMoreStuff
             };
             card.Use.Checked = Wanted(item);
             // a GameBanana mod: its creator in gold, opening its page, as on Browse Mods (user 2026-10-12)
-            Match page = Regex.Match(item.Id ?? "", @"^gamebanana:(\d+):");
+            Match page = Regex.Match(item.Id ?? "", @"^gamebanana:(-?\d+):");
             if (page.Success)
             {
                 // its creator a favorite (or not) with the heart, as on Browse Mods: by their member number once GameBanana's
@@ -994,7 +1062,7 @@ namespace ExMoreStuff
                 long id = long.Parse(page.Groups[1].Value);
                 GameBanana.Support support;
                 GameBanana.Supports.TryGetValue(gb.AuthorId, out support);   // their Ko-fi / Patreon, once the list is in
-                card.ShowCreator(item.Author, "https://gamebanana.com/mods/" + id, Creators.IsFavorite(gb), support, tips);
+                card.ShowCreator(item.Author, new GameBanana.Mod { Id = id }.Page, Creators.IsFavorite(gb), support, tips);
                 // the gold name: that creator's mods on Browse Mods (user 2026-10-12); the blue icon: this mod's page
                 card.CreatorClicked += (s, e) => { ShowTab(communityTab); communityPage.ShowCreatorOf(id, item.Author); };
                 tips.SetToolTip(card.Page, "Open its page on GameBanana");
@@ -1030,6 +1098,7 @@ namespace ExMoreStuff
             {
                 wanted[item.Key] = card.Use.Checked;
                 card.Invalidate();
+                if (item.IsColor && costumeGrid != null && !costumeGrid.IsDisposed) costumeGrid.Invalidate();   // its switch in the colors strip
                 FighterTile tile;
                 if (!item.IsStage && tiles.TryGetValue(item.Fighter, out tile)) Count(tile, item.Fighter);
                 UpdateStatus();
@@ -1075,6 +1144,7 @@ namespace ExMoreStuff
 
         static string Short(PerfTest.Result r)
         {
+            if (r.Estimated) return r.FullSpeed ? "60+ fps, full speed" : "about " + r.Average.ToString("0") + " fps, may not keep full speed";   // from the game's speed only
             return r.Average.ToString("0") + " fps, " + (r.FullSpeed ? "full speed" : "may not keep full speed") +
                    (r.Slower >= 5 ? ", " + r.Slower.ToString("0") + "% slower than the game's own" : "");
         }
@@ -1090,8 +1160,30 @@ namespace ExMoreStuff
                                                           : "Test how it runs on this PC (" + Fighters.Name(item.Fighter) + " on both sides)");
             test.Click += async (s, e) => await Test(item, record);
             menu.Items.Add(test);
+            if (item.IsStage)   // its music heard in the game (user 2026-10-15; the test's benchmark plays none)
+            {
+                var listen = new ToolStripMenuItem("Listen to stage");
+                listen.Click += async (s, e) => await ListenTo(item, record);
+                menu.Items.Add(listen);
+            }
             menu.Closed += (s, e) => CharacterPicker.BeginDispose(menu);
             menu.Show(mark, new Point(0, mark.Height + 2));
+        }
+
+        // Listen to stage: the stage in the game with its own music for a minute (PerfTest.Listen); the player may close
+        // the game sooner. Wording approved by the user.
+        async Task ListenTo(Item item, Installed record)
+        {
+            string blocked = PerfTest.Blocked();
+            if (blocked != null) { MessageBox.Show(this, blocked + ".", Text, MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            string name = Weight.Name(record), g = game, problem = null;
+            Busy(true);
+            SetStatus("Playing " + name + " in the game with its music for " + PerfTest.ListenSeconds + " seconds...");
+            try { await Task.Run(() => PerfTest.Listen(g, item)); }
+            catch (Exception ex) { problem = ex.Message; }
+            finally { Busy(false); }
+            UpdateStatus();
+            if (problem != null) MessageBox.Show(this, "Listen to stage didn't finish: " + problem, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         static string Wrapped(string text, int width)
@@ -1178,11 +1270,55 @@ namespace ExMoreStuff
             double? fps = PerfTest.PcResult();
             if (fps == null) return "This PC hasn't been checked yet: EX More Stuff checks it the first time you install or apply something (Hugo vs Poison on Blast Furnace, " +
                                     "the game's heaviest stage, in the game's own benchmark).";
+            if (PerfTest.PcEstimated() && fps.Value >= 59)   // from the game's speed only: 60 means 60 or more
+                return "This PC runs the game's heaviest stage (Blast Furnace, Hugo vs Poison) at full speed (60 fps or more) in the game's own benchmark.";
             return "This PC runs the game's heaviest stage (Blast Furnace, Hugo vs Poison) at " + fps.Value.ToString("0") + " fps in the game's own benchmark" +
                    (fps.Value >= 59 ? ", so at full speed." : ", below full speed (60 fps).") + " Custom stages you test are compared with it.";
         }
 
         // The trash can on a card: the package deleted for good (as in Package codes), whatever else is waiting for Apply.
+        // Browse Mods' Uninstall (user 2026-10-16: "each card should have an uninstall button in the browser too"):
+        // everything a GameBanana mod put in comes out as the trash can's Delete does (its costumes and stages, an override,
+        // a song mod), EX More Stuff's copies to the Recycle Bin. True when it went.
+        async Task<bool> UninstallMod(string key, string name)
+        {
+            var records = installed.Concat(removed).Where(r => (r.Item.Id ?? "").StartsWith(key, StringComparison.OrdinalIgnoreCase)).ToList();
+            var overrides = Overrides.Load(game).Where(o => (o.Id ?? "").StartsWith(key, StringComparison.OrdinalIgnoreCase)).ToList();
+            bool song = SongMods.Load().Any(s => s.Key == key);
+            if ((records.Count == 0 && overrides.Count == 0 && !song) || !GameClosed()) return false;
+            string what = records.Count == 1 && overrides.Count == 0 && !song ? PackagesPanel.DeleteQuestion(game, records[0])
+                        : song && records.Count == 0 && overrides.Count == 0
+                            ? "It's taken out of EX More Stuff. A stage or fighter playing it now keeps it until you pick another song.\n\nYou can download it again from Browse Mods."
+                            : "It's taken out of the game and out of EX More Stuff.\n\nYou can download it again from Browse Mods.";
+            using (var dialog = new DeleteDialog(name, what, "Uninstall"))
+            {
+                dialog.ShowDialog(this);
+                if (dialog.Picked == DeleteDialog.Choice.Cancel) return false;
+            }
+            string g = game;
+            var notes = new List<string>();
+            PageWorking(true);
+            try
+            {
+                foreach (Installed record in records)
+                {
+                    bool recycle = PackagesPanel.RecyclesZip(g, record);
+                    string note = await Task.Run(() => PackagesPanel.PurgeForGood(g, record));
+                    if (recycle) PackagesPanel.RecycleZip(record.Package);
+                    if (note != null) notes.Add(note);
+                    wanted.Remove(record.Item.Key);
+                }
+                foreach (Override o in overrides) await Task.Run(() => Overrides.Uninstall(g, o.Id));
+                if (song) SongMods.Remove(key);
+            }
+            catch (Exception ex) { notes.Add("It wasn't all uninstalled: " + ex.Message); }
+            finally { PageWorking(false); }
+            ReloadKeeping(null);
+            UpdateStatus(name + " is uninstalled");
+            if (notes.Count > 0) MessageBox.Show(this, string.Join("\n", notes), Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return true;
+        }
+
         async Task DeleteItem(Item item)
         {
             Installed record = installed.FirstOrDefault(r => r.Item.Key == item.Key) ?? RemovedRecord(item.Key);
@@ -1275,6 +1411,7 @@ namespace ExMoreStuff
             }
             card.Picture = image;
             card.Invalidate();
+            if (item.IsColor && costumeGrid != null && !costumeGrid.IsDisposed) costumeGrid.Invalidate();   // the colors strip shows it too
         }
 
         // Whenever nothing is running, the status line also says the program can simply be closed.
@@ -1282,6 +1419,7 @@ namespace ExMoreStuff
 
         void UpdateStatus(string done = null)
         {
+            ShowEverythingButton();
             int pending = Pending();
             apply.Enabled = pending > 0 && !locked;   // not while something works
             string count = installed.Count + " installed" + (replaced.Count > 0 ? ", " + replaced.Count + " replaced" : "");
@@ -1785,6 +1923,7 @@ namespace ExMoreStuff
             if (swapped.Count > 0) what += (what.Length > 0 ? " and put back " : "Put back ") + "the " + swapped.Count + " game costume" + (swapped.Count > 1 ? "s" : "") + " it replaced";
             if (MessageBox.Show(this, what + "? Their files leave the game, but they stay listed, so you can switch them back on. The game's own files are not touched.",
                     Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) return;
+            SaveEverything();   // what was on, for Restore previous
             var problems = new List<string>();
             foreach (Installed record in installed.ToList())
             {
@@ -1816,6 +1955,86 @@ namespace ExMoreStuff
             Reload();
             if (problems.Count > 0)
                 MessageBox.Show(this, "Some couldn't be switched off:\n\n" + string.Join("\n", problems), Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        // Restore previous (user 2026-10-16: "we need the inverse of that button ... restore previous"): what Disable
+        // everything switched off (everything.json beside the program, for this game folder) wanted on again, the game
+        // stages and costumes they stood in for as they were, then Apply as usual (a flagged package asks once more);
+        // ones gone since or locked by a failed test stay off.
+        static string EverythingFile { get { return AppFolders.DataFile("everything.json"); } }
+
+        void SaveEverything()
+        {
+            try
+            {
+                var j = new Dictionary<string, object>
+                {
+                    { "game", game }, { "on", installed.Select(r => r.Item.Key).ToList() },
+                    { "replaced", replaced.ToDictionary(r => r.Key, r => (object)r.Value) }, { "swapped", swapped.ToDictionary(s => s.Key, s => (object)s.Value) },
+                };
+                SafeFile.WriteAllText(EverythingFile, new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(j), true);
+            }
+            catch (Exception) { }   // not kept: Restore previous can't offer it
+        }
+
+        // what Disable everything switched off that isn't back on: (keys, replacements, swaps), or null
+        Tuple<List<string>, Dictionary<string, string>, Dictionary<string, int>> Previous()
+        {
+            try
+            {
+                if (!File.Exists(EverythingFile)) return null;
+                var j = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(EverythingFile));
+                if (!string.Equals(Convert.ToString(j["game"]), game, StringComparison.OrdinalIgnoreCase)) return null;
+                var items = AllItems().GroupBy(i => i.Key).ToDictionary(g => g.Key, g => g.First());
+                Func<Item, bool> usable = i => PerfTest.Locked(i) == null;
+                var on = ((System.Collections.ArrayList)j["on"]).Cast<object>().Select(Convert.ToString)
+                         .Where(k => items.ContainsKey(k) && usable(items[k]) && !IsInstalled(k)).ToList();
+                var stages = new HashSet<string>(Stages.Codes.Concat(AllItems().Where(i => i.IsStage && usable(i)).Select(i => i.Code)).Concat(Overrides.Load(game).Select(o => Overrides.Prefix + o.Id)));
+                var rep = ((Dictionary<string, object>)j["replaced"]).ToDictionary(r => r.Key, r => Convert.ToString(r.Value))
+                          .Where(r => stages.Contains(r.Value) && Replacement(replaced, r.Key) != r.Value).ToDictionary(r => r.Key, r => r.Value);
+                var swaps = ((Dictionary<string, object>)j["swapped"]).ToDictionary(s => s.Key, s => Convert.ToInt32(s.Value)).Where(s =>
+                {
+                    string f; int c;
+                    return CostumeSwaps.ParseKey(s.Key, out f, out c) && Swap(swapped, s.Key) != s.Value &&
+                           (s.Value == 1 || AllItems().Any(i => i.IsCostume && i.Fighter == f && i.Slot == s.Value && usable(i)));
+                }).ToDictionary(s => s.Key, s => s.Value);
+                if (on.Count + rep.Count + swaps.Count == 0) { File.Delete(EverythingFile); return null; }   // all back on: nothing to restore
+                return Tuple.Create(on, rep, swaps);
+            }
+            catch (Exception) { return null; }
+        }
+
+        async Task RestorePrevious()
+        {
+            var previous = Previous();
+            if (previous == null || !GameClosed()) return;
+            foreach (string key in previous.Item1) wanted[key] = true;
+            foreach (var r in previous.Item2) wantedReplaced[r.Key] = r.Value;
+            foreach (var s in previous.Item3) wantedSwaps[s.Key] = s.Value;
+            await Apply();
+            if (Previous() == null) try { File.Delete(EverythingFile); } catch (Exception) { }
+            ShowEverythingButton();
+        }
+
+        // the footer's button: Disable everything, or Restore previous while something it switched off is still off; its
+        // hover says which (wording approved by the user)
+        void ShowEverythingButton()
+        {
+            var previous = Previous();
+            if (previous == null)
+            {
+                disableAll.Text = "Disable everything";
+                tips.SetToolTip(disableAll, "Switch off every costume and stage EX More Stuff put in the game, and give the game back its own stages and costumes " +
+                                            "where they were replaced. Nothing is deleted: Restore previous turns it all back on.");
+            }
+            else
+            {
+                int stages = previous.Item2.Count + previous.Item3.Count;
+                disableAll.Text = "Restore previous";
+                tips.SetToolTip(disableAll, "Turn back on what Disable everything switched off: " + previous.Item1.Count + " costume" + (previous.Item1.Count == 1 ? "" : "s") + " and stage" +
+                                            (previous.Item1.Count == 1 ? "" : "s") + (stages > 0 ? ", and " + stages + " game stage" + (stages == 1 ? "" : "s") + " and costume" + (stages == 1 ? "" : "s") + " they stood in for" : "") + ".");
+            }
+            disableAll.Invalidate();
         }
     }
 }

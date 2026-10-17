@@ -20,7 +20,11 @@ namespace ExMoreStuff
         const int Hop = 2048, Bands = 6;
         const double MinLoopSeconds = 10, Window = 4;   // a loop of 10 s at least; matches judged over 4 s
 
-        public static LoopSuggestion Find(short[] pcm)
+        public static LoopSuggestion Find(short[] pcm) { return FindAll(pcm)[0]; }
+
+        /// <summary>Every loop found, the best first (Find's pick; up to 6): Advanced > Music's Next loop steps through
+        /// them (user 2026-10-16: "check next possible loop").</summary>
+        public static List<LoopSuggestion> FindAll(short[] pcm)
         {
             int frames = pcm.Length / 2;
             int end = LastSound(pcm);
@@ -80,18 +84,20 @@ namespace ExMoreStuff
                 if (candidates.TrueForAll(c => Math.Abs(c[0] - r[0]) > second)) candidates.Add(r);
             }
             if (candidates.Count == 0)
-                return new LoopSuggestion { Start = 0, End = Math.Max(Adx.FrameSamples * 4, end), Match = SeamMatch(pcm, 0, end), Repeat = false };
+                return new List<LoopSuggestion> { new LoopSuggestion { Start = 0, End = Math.Max(Adx.FrameSamples * 4, end), Match = SeamMatch(pcm, 0, end), Repeat = false } };
 
-            // each candidate made exact on the waveform; kept: the best seam, longer loops winning near-ties
-            LoopSuggestion pick = null;
-            double pickValue = double.MinValue;
+            // each candidate made exact on the waveform; the best seam first, longer loops winning near-ties (the same
+            // loop found twice: kept once)
+            var found = new List<KeyValuePair<double, LoopSuggestion>>();
             foreach (var c in candidates)
             {
                 var s = Exact(pcm, c[0] * Hop, c[2] * Hop, c[1] * Hop);
                 double value = s.Match + 0.15 * Math.Min(1.0, (s.End - s.Start) / (60.0 * Song.Rate));
-                if (value > pickValue) { pickValue = value; pick = s; }
+                if (found.TrueForAll(k => Math.Abs(k.Value.Start - s.Start) > Song.Rate / 10 || Math.Abs(k.Value.End - s.End) > Song.Rate / 10))
+                    found.Add(new KeyValuePair<double, LoopSuggestion>(value, s));
             }
-            return pick;
+            found.Sort((a, b) => b.Key.CompareTo(a.Key));
+            return found.ConvertAll(k => k.Value);
         }
 
         // a candidate (delay, matching run) to sample accuracy: the delay from the waveform, the start at the earliest
@@ -117,6 +123,61 @@ namespace ExMoreStuff
             length = RefineLength(pcm, start, length, Song.Rate / 50, Song.Rate / 2);
             int stop = Math.Min(frames, start + length);
             return new LoopSuggestion { Start = start, End = stop, Match = SeamMatch(pcm, start, stop), Repeat = true };
+        }
+
+        /// <summary>The loop end nearest after `from` (`forward`) or before it where the music matches what follows `start`
+        /// (Advanced > Music's Next match / Previous match, user 2026-10-16: "the user puts the green slider where they want
+        /// the loop to be, then the orange slider can be ticked to find next closest match"); -1 when there's none. Found
+        /// on the sound fingerprint (up to 4 s after each side compared, every 46 ms), then made exact on the waveform.</summary>
+        public static int MatchEnd(short[] pcm, int start, int from, bool forward)
+        {
+            int frames = pcm.Length / 2;
+            var f = Fingerprint(pcm, frames);
+            int n = f.Length / Bands, win = Math.Max(1, (int)(Window * Song.Rate / Hop)), least = Math.Max(1, Song.Rate / Hop), s0 = start / Hop;
+            if (s0 + least >= n) return -1;
+            // what unrelated moments differ by, so "alike" means well below it
+            var sample = new List<double>();
+            var rng = new Random(1);
+            for (int i = 0; i < 4000 && n > 2; i++)
+            {
+                int a = rng.Next(n), b = rng.Next(n);
+                if (Math.Abs(a - b) > win) sample.Add(Dist(f, a, b));
+            }
+            sample.Sort();
+            double typical = sample.Count > 0 ? sample[sample.Count / 2] : 1, limit = 0.25 * typical;
+            // how alike what follows the start and what follows each end are (at least 1 s of each; up to 4 s)
+            var alike = new double[n];
+            for (int t = 0; t < n; t++) alike[t] = double.MaxValue;
+            for (int t = s0 + least; t + least <= n; t++)
+            {
+                int w = Math.Min(win, Math.Min(n - t, n - s0));
+                double sum = 0;
+                for (int k = 0; k < w; k++) sum += Dist(f, s0 + k, t + k);
+                alike[t] = sum / w;
+            }
+            // the matches: stretches where it's alike, each its best moment (one spot, not several 46 ms apart), at least half a
+            // second past the orange line either way
+            var spots = new List<int>();
+            for (int t = s0 + least; t < n; t++)
+            {
+                if (alike[t] >= limit) continue;
+                int best = t;
+                while (t + 1 < n && alike[t + 1] < limit) { t++; if (alike[t] < alike[best]) best = t; }
+                if (spots.Count > 0 && best - spots[spots.Count - 1] < least / 2) { if (alike[best] < alike[spots[spots.Count - 1]]) spots[spots.Count - 1] = best; }
+                else spots.Add(best);
+            }
+            int pick = -1, at = from / Hop, half = least / 2;
+            foreach (int t in spots)
+            {
+                if (forward && t > at + half) { pick = t; break; }
+                if (!forward && t < at - half) pick = t;
+            }
+            if (pick < 0) return -1;
+            // to the sample: the loop length lined up on the waveform, then the end fitted to the start
+            int length = RefineLength(pcm, start, pick * Hop - start, Hop + Hop / 2, (int)(Window * Song.Rate));
+            int end = Math.Min(frames, start + length);
+            try { end = FitEnd(pcm, start, end, Song.Rate / 50); } catch (Exception) { }
+            return end;
         }
 
         /// <summary>The loop end within ±`reach` frames of `end` whose music best continues into `start`.</summary>

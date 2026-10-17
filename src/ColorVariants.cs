@@ -69,12 +69,6 @@ namespace ExMoreStuff
                 List<int> known;
                 if (patterned.TryGetValue(key, out known)) return known;
             }
-            if (patternStarts == null)
-            {
-                var starts = new byte[Patterns][];
-                for (int n = 1; n <= Patterns; n++) { byte[] dds = Resource("patterns.pattern" + n + ".dds"); starts[n - 1] = new byte[Math.Min(1024, dds.Length)]; Array.Copy(dds, starts[n - 1], starts[n - 1].Length); }
-                patternStarts = starts;
-            }
             var colors = new List<int>();
             using (var zip = System.IO.Compression.ZipFile.OpenRead(zipPath))
                 for (int c = 1; c <= 10; c++)
@@ -85,14 +79,76 @@ namespace ExMoreStuff
                     var head = new byte[16384];
                     int read = 0;
                     using (Stream s = entry.Open()) for (int got; read < head.Length && (got = s.Read(head, read, head.Length - read)) > 0; ) read += got;
-                    if (read < 32 || Encoding.ASCII.GetString(head, 0, 4) != "#EMB") continue;
-                    int table = BitConverter.ToInt32(head, 24);
-                    if (table < 0 || table + 8 > read) continue;
-                    int start = BitConverter.ToInt32(head, table) + table;
-                    if (patternStarts.Any(p => start >= 0 && start + p.Length <= read && Same(head, start, p))) colors.Add(c);
+                    if (PatternOf(head, read) > 0) colors.Add(c);
                 }
             lock (patterned) patterned[key] = colors;
             return colors;
+        }
+
+        // which pattern (1-9) a .col.emb's first texture is, from its first `read` bytes; 0: none, the mod's own
+        static int PatternOf(byte[] head, int read)
+        {
+            if (patternStarts == null)
+            {
+                var starts = new byte[Patterns][];
+                for (int n = 1; n <= Patterns; n++) { byte[] dds = Resource("patterns.pattern" + n + ".dds"); starts[n - 1] = new byte[Math.Min(1024, dds.Length)]; Array.Copy(dds, starts[n - 1], starts[n - 1].Length); }
+                patternStarts = starts;
+            }
+            if (read < 32 || Encoding.ASCII.GetString(head, 0, 4) != "#EMB") return 0;
+            int table = BitConverter.ToInt32(head, 24);
+            if (table < 0 || table + 8 > read) return 0;
+            int start = BitConverter.ToInt32(head, table) + table;
+            for (int n = 0; n < Patterns; n++)
+                if (start >= 0 && start + patternStarts[n].Length <= read && Same(head, start, patternStarts[n])) return n + 1;
+            return 0;
+        }
+
+        /// <summary>Color `color` (1-10) of a package made a debug color (user 2026-10-16: a color that only looks like
+        /// another, as Shao Kahn's 3 and 4 or Kung Lao's open shirt, right-click > "Force debug color"; later a fallback
+        /// costume): a pattern no other color of it uses, shaped like its first color of its own and with that color's
+        /// material, and the pattern's picture, in its zip. Returns the new files by name, for the game's copy.</summary>
+        public static Dictionary<string, byte[]> Force(string zipPath, string prefix, int color)
+        {
+            return SafeFile.EditZip(zipPath, zip =>   // on a copy, swapped in when done
+            {
+                Func<string, System.IO.Compression.ZipArchiveEntry> find = name => zip.Entries.FirstOrDefault(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase));
+                Func<string, byte[]> read = name =>
+                {
+                    var entry = find(name);
+                    if (entry == null) return null;
+                    using (Stream s = entry.Open()) using (var data = new MemoryStream()) { s.CopyTo(data); return data.ToArray(); }
+                };
+                Func<int, string, string> named = (c, suffix) => prefix + "_" + c.ToString("D2") + suffix;
+                var used = new HashSet<int>();
+                int own = 0;
+                for (int c = 1; c <= 10; c++)
+                {
+                    if (c == color) continue;
+                    byte[] col = read(named(c, ".col.emb"));
+                    if (col == null) continue;
+                    int n = PatternOf(col, Math.Min(col.Length, 16384));
+                    if (n > 0) used.Add(n);
+                    else if (own == 0) own = c;
+                }
+                if (own == 0) throw new InvalidOperationException("it would have no color of its own left");
+                int pattern = Enumerable.Range(1, Patterns).FirstOrDefault(n => !used.Contains(n));
+                if (pattern == 0) pattern = (color - 1) % Patterns + 1;
+                var made = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { named(color, ".col.emb"), Patterned(read(named(own, ".col.emb")), pattern) },
+                    { named(color, ".png"), PatternPicture(pattern) },
+                };
+                byte[] material = read(named(own, ".obj.emm"));
+                if (material != null) made[named(color, ".obj.emm")] = material;
+                foreach (var file in made)
+                {
+                    var old = find(file.Key);
+                    string path = old != null ? old.FullName : file.Key;
+                    if (old != null) old.Delete();
+                    using (Stream s = zip.CreateEntry(path, System.IO.Compression.CompressionLevel.Optimal).Open()) s.Write(file.Value, 0, file.Value.Length);
+                }
+                return made;
+            });
         }
 
         static bool Same(byte[] data, int at, byte[] part)
@@ -161,8 +217,8 @@ namespace ExMoreStuff
         }
 
         /// <summary>Whether two colors (Look) look the same: every texture of one nearly as the other's, its color and
-        /// alpha (a copy, or a change nobody would see: under 1 pixel in 1000 visibly changed and under 2 of 255 apart on
-        /// average). Texture by texture, so a change to one isn't lost among the big ones that stay (user 2026-10-13: Female
+        /// alpha (a copy, or a change nobody would see: under 1 pixel in 200 visibly changed and under 2 of 255 apart on
+        /// average; user 2026-10-16: Little Arcade Worker's color 2, 0.3% of its pixels changed, "extremely similar to color 1"). Texture by texture, so a change to one isn't lost among the big ones that stay (user 2026-10-13: Female
         /// Shao Kahn's 6 colors, which differ in their alpha masks, were taken for copies when it was averaged over all).</summary>
         public static bool LookSame(List<byte[]> a, List<byte[]> b)
         {
@@ -179,7 +235,7 @@ namespace ExMoreStuff
                     difference += d;
                     if (d > 24) changed++;
                 }
-                if (changed * 1000L > pixels || difference > 2L * x.Length) return false;
+                if (changed * 200L > pixels || difference > 2L * x.Length) return false;
             }
             return true;
         }

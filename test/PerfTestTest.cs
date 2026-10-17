@@ -154,6 +154,16 @@ namespace ExMoreStuff
             Check(r.Average == 45 && !r.FullSpeed && PerfTest.Locked(stage) == null, "45 fps without a size warning: said, not locked");
             r = PerfTest.Run(game, stage, true, said.Add);
             Check((PerfTest.Locked(stage) ?? "").Contains("below full speed"), "45 fps with one: locked (" + PerfTest.Locked(stage) + ")");
+            PerfTest.Unlock(stage.Key);
+            Console.WriteLine("The benchmark's own numbers not caught: the game's speed instead (a player 2026-10-15)");
+            Environment.SetEnvironmentVariable("EXMS_FAKE_MODE", "speed only");
+            r = PerfTest.Run(game, stage, true, said.Add);
+            Check(r.Estimated && r.Average == 60 && r.FullSpeed && PerfTest.Locked(stage) == null && PerfTest.Describe("U50", r).Contains("60 fps or more"),
+                  "speed 1: full speed (60 or more), not locked: " + PerfTest.Describe("U50", r));
+            Environment.SetEnvironmentVariable("EXMS_FAKE_MODE", "speed only slow");
+            r = PerfTest.Run(game, stage, true, said.Add);
+            Check(r.Estimated && Math.Abs(r.Average - 45) < 0.1 && (PerfTest.Locked(stage) ?? "").Contains("below full speed"), "speed 1.333: about 45 fps, locked with a size warning");
+            Check(PerfTest.Last(stage.Key).Estimated, "kept as from the speed only");
             Environment.SetEnvironmentVariable("EXMS_FAKE_MODE", null);
             PerfTest.Unlock(stage.Key);
 

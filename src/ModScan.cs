@@ -173,6 +173,73 @@ namespace ExMoreStuff
             return where;
         }
 
+        /// <summary>Whether a package came from Import (Advanced > Import Your Legacy Mods): one that can be put back.</summary>
+        public static bool Imported(Installed record) { return (record.Item.Id ?? "").StartsWith("import:"); }
+
+        static readonly Regex Numbered = new Regex(@" \(\d+\)\.[^.]+$");
+
+        /// <summary>An imported package's original files in Mods\Legacy mods backup (backup path -> its place in the game
+        /// folder): those of the latest day holding any, found by what they are (Describe), as the import found them, so
+        /// imports from before this was kept are found too. A second file of the same name that day (" (2)") is left.</summary>
+        public static List<KeyValuePair<string, string>> Originals(Installed record)
+        {
+            string key = (record.Item.Id ?? "").Substring("import:".Length);
+            var none = new List<KeyValuePair<string, string>>();
+            if (!Directory.Exists(AppFolders.OldModsBackup)) return none;
+            foreach (string day in Directory.GetDirectories(AppFolders.OldModsBackup).OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal))
+            {
+                var files = new List<KeyValuePair<string, string>>();
+                foreach (string path in Directory.EnumerateFiles(day, "*", SearchOption.AllDirectories))
+                {
+                    string relative = path.Substring(day.Length + 1);
+                    int slash = relative.IndexOf(Path.DirectorySeparatorChar);
+                    if (slash < 0 || Array.IndexOf(PatchFolders, relative.Substring(0, slash).ToLowerInvariant()) < 0 || Numbered.IsMatch(relative)) continue;
+                    if (Describe(relative.Substring(slash + 1)).Key == key) files.Add(new KeyValuePair<string, string>(path, relative));
+                }
+                if (files.Count > 0) return files;
+            }
+            return none;
+        }
+
+        /// <summary>Undoes an import (user 2026-10-15: "do it for each one individually"): the package deleted as its trash
+        /// can deletes it (what it stood in for given back, its zip to the Recycle Bin), then its original files moved back
+        /// from Mods\Legacy mods backup to where they were. Nothing changes when one of them can't go back (gone from the
+        /// backup, or another file in its place now). Returns a note (songs on it, files that stayed), or null.</summary>
+        public static string PutBack(string game, Installed record)
+        {
+            if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
+            var originals = Originals(record);
+            if (originals.Count == 0) throw new IOException("its original files aren't in Mods\\Legacy mods backup any more");
+            var ours = Ours(game);
+            foreach (var f in originals)
+                if (File.Exists(Path.Combine(game, f.Value)) && !ours.Contains(f.Value))
+                    throw new IOException("the game folder has another " + Path.GetFileName(f.Value) + " in " + Path.GetDirectoryName(f.Value) + " now");
+            bool recycle = PackagesPanel.RecyclesZip(game, record);
+            var notes = new List<string>();
+            string kept = PackagesPanel.PurgeForGood(game, record);
+            if (kept != null) notes.Add(kept);
+            if (recycle) PackagesPanel.RecycleZip(record.Package);
+            // each copied back and checked (its size and contents) before its backup goes (user 2026-10-15: "move the files,
+            // confirm the size and then delete"); one that doesn't match stays in the backup
+            var stayed = new List<string>();
+            foreach (var f in originals)
+            {
+                string to = Path.Combine(game, f.Value);
+                if (File.Exists(to)) { stayed.Add(Path.GetFileName(to)); continue; }
+                Directory.CreateDirectory(Path.GetDirectoryName(to));
+                File.Copy(f.Key, to);
+                if (new FileInfo(to).Length == new FileInfo(f.Key).Length && Installer.Sha256(to) == Installer.Sha256(f.Key)) File.Delete(f.Key);
+                else { File.Delete(to); stayed.Add(Path.GetFileName(to)); }
+            }
+            // the backup's folders left empty go
+            foreach (string folder in originals.Select(f => Path.GetDirectoryName(f.Key)).Distinct())
+                for (string d = folder; d != null && d.Length > AppFolders.OldModsBackup.Length; d = Path.GetDirectoryName(d))
+                    try { if (Directory.Exists(d) && !Directory.EnumerateFileSystemEntries(d).Any()) Directory.Delete(d); else break; }
+                    catch (IOException) { break; }
+            if (stayed.Count > 0) notes.Add("still in Mods\\Legacy mods backup (it couldn't be put back): " + string.Join(", ", stayed));
+            return notes.Count > 0 ? string.Join("\n", notes) : null;
+        }
+
         // a fighter's voice files put in by hand (<F>_E.csb, <F>_J.csb in a patch folder, not the game's own or EX More Stuff's):
         // the last patch folder's when several have one, as the game loads it. Files in the game's own folders are left alone.
         static List<string> ModdedVoices(string game, string fighter)

@@ -58,9 +58,11 @@ namespace ExMoreStuff
             stale = false;
             if (!Game.IsGameFolder(game)) { found = new List<ModScan.Found>(); Show(found); return; }
             scanning = true;
-            Say("Looking through the game's folders...");
+            const string looking = "Looking through the game's folders...";
+            Say(looking);
             string g = game;
-            try { found = await Task.Run(() => ModScan.Scan(g)); Say(""); }
+            // cleared only while it still says that: an import's or a Put back's result said meanwhile stays
+            try { found = await Task.Run(() => ModScan.Scan(g)); if (status.Text == looking) Say(""); }
             catch (Exception ex) { found = new List<ModScan.Found>(); Say("The game's folders couldn't be read: " + ex.Message, true); }
             finally { scanning = false; }
             Show(found);
@@ -94,6 +96,30 @@ namespace ExMoreStuff
                     State = m.CanImport ? (m.Kind == ModScan.Kind.Stage ? "Stage: can be imported" : "Costume: can be imported") : "Stays as it is",
                     CanImport = m.CanImport,
                 });
+            // what was imported, each with Put back (user 2026-10-15: "do it for each one individually"; wording approved)
+            var imported = Game.IsGameFolder(game)
+                ? Installer.Load(game).Concat(Installer.Removed(game)).Where(ModScan.Imported).GroupBy(r => r.Item.Key).Select(g => g.First()).ToList()
+                : new List<Installed>();
+            if (imported.Count > 0)
+            {
+                controls.Add(new Heading("Imported legacy mods", width));
+                controls.Add(ShadowLabel.Note("Put one back to undo its import: EX More Stuff deletes its package and moves its original files from " +
+                                              "Mods\\Legacy mods backup back to where they were in the game folder.", width));
+                foreach (Installed r in imported)
+                {
+                    Installed record = r;
+                    bool can = ModScan.Originals(record).Count > 0;
+                    string where = record.Item.IsStage ? "Stage " + record.Item.Code : Fighters.Name(record.Item.Fighter) + " " + record.Item.Slot.ToString("D2");
+                    var row = new ImportedRow
+                    {
+                        Size = new Size(width, 64), Margin = new Padding(6, 3, 6, 3), Title = record.Shown ?? record.Item.Name,
+                        Detail = can ? where : where + "   ·   Its original files aren't in Mods\\Legacy mods backup any more",
+                    };
+                    row.PutBack.Enabled = can;
+                    row.PutBack.Click += async (s, e) => await PutBack(record, row.Title);
+                    controls.Add(row);
+                }
+            }
             list.SuspendLayout();
             foreach (Control c in list.Controls.Cast<Control>().ToList()) if (c != import && c != status) c.Dispose();
             list.Controls.Clear();
@@ -139,6 +165,24 @@ namespace ExMoreStuff
             else if (notes.Count > 0)
                 MessageBox.Show(FindForm(), done.Count + " imported." + noted, "EX More Stuff", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Say(done.Count + " imported" + (keep ? ", showing where they were" : "") + (problems.Count > 0 ? "; " + problems.Count + " couldn't be" : ""), problems.Count > 0);
+        }
+
+        // an import undone (ModScan.PutBack), after a Yes
+        async Task PutBack(Installed record, string name)
+        {
+            if (Game.IsRunning()) { Say("Close the game first", true); return; }
+            if (MessageBox.Show(FindForm(), "Put back " + name + "? Its package is deleted from EX More Stuff, and its original files go back into the game folder where they were.",
+                                "EX More Stuff", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            string g = game, note = null;
+            bool done = false;
+            Busy(true);
+            try { note = await Task.Run(() => ModScan.PutBack(g, record)); done = true; }
+            catch (Exception ex) { Say(name + " wasn't put back: " + ex.Message, true); }
+            finally { Busy(false); }
+            if (!done) return;
+            var changed = Changed;
+            if (changed != null) changed(); else Fill();   // listed again above, as a legacy mod
+            Say(name + " is back in the game folder as it was" + (note != null ? ". " + note : ""), note != null);
         }
 
         void Busy(bool on)
@@ -220,6 +264,35 @@ namespace ExMoreStuff
         {
             if (keys == Keys.Escape) { Picked = Choice.Cancel; DialogResult = DialogResult.Cancel; return true; }
             return base.ProcessCmdKey(ref msg, keys);
+        }
+    }
+
+    // One imported legacy mod: its name, where it is now, and Put back.
+    class ImportedRow : Clear
+    {
+        public string Title, Detail;
+        public readonly FlatButton PutBack = new FlatButton("Put back");
+
+        public ImportedRow() { Controls.Add(PutBack); }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            PutBack.Location = new Point(Width - 16 - PutBack.Width, (Height - PutBack.Height) / 2);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            Smooth(g);
+            using (var path = Theme.Rounded(new RectangleF(1, 1, Width - 3, Height - 3), 10))
+            {
+                using (var fill = new SolidBrush(Theme.Card)) g.FillPath(fill, path);
+                using (var pen = new Pen(Theme.Line)) g.DrawPath(pen, path);
+            }
+            int right = PutBack.Left - 12;
+            Theme.Draw(g, Title, Theme.Bold(10.5f), Theme.Text, new Rectangle(14, 10, right - 14, 22), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            Theme.Draw(g, Detail, Theme.Font(8.5f), Theme.Muted, new Rectangle(14, 34, right - 14, 18), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
     }
 

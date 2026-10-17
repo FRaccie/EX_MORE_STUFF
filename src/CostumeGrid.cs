@@ -9,7 +9,8 @@ namespace ExMoreStuff
     // A fighter's game costumes on their Costumes page, to replace: a tile each (the costume's picture in color 1, from
     // CostumeArt, else the fighter's portrait; its name), and for one that plays as another a "Plays as" band and a thick
     // white border, as on the Stages page. Under them, the colors of the costume the mouse was last on (the first at
-    // first), each with its number.
+    // first), each with its number, and then its extra colors (color packs, 30-99) in a row of their own, each with a
+    // small on/off switch above it (user 2026-10-17's mockup: "the on/off switch above each custom color").
     class CostumeGrid : Clear
     {
         public const int TileWidth = CostumeArt.CellWidth + 24, NameHeight = 26, TileHeight = CostumeArt.CellHeight + 8 + NameHeight, Gap = 12;
@@ -20,6 +21,13 @@ namespace ExMoreStuff
         public Func<int, string> PlaysAs = n => null;   // what the costume plays as, or null
         public event Action<int> Clicked;
         int hover = -1, shown;
+
+        /// <summary>An extra color of a costume: its number, its picture (null while it loads), whether it's on, and the
+        /// switch's doing (on or off).</summary>
+        public sealed class Extra { public int Number; public Func<Image> Picture; public Func<bool> On; public Action<bool> Switch; }
+        public Func<int, List<Extra>> Extras = n => new List<Extra>();
+        const int SwitchHeight = 18, SwitchWidth = 34, SwitchGap = 4;
+        readonly List<Tuple<Rectangle, Extra>> switches = new List<Tuple<Rectangle, Extra>>();   // where each switch was drawn
 
         public static string CostumeName(int n) { return n == 1 ? "Original" : "Alternate " + (n - 1); }
 
@@ -35,11 +43,13 @@ namespace ExMoreStuff
 
         // the colors' rows: as many as the costume with the most colors needs, so the page doesn't jump between costumes
         int StripRows { get { return Costumes.Count == 0 ? 0 : Costumes.Max(n => (CostumeArt.Colors(Fighter, n) + SwatchesPerRow - 1) / SwatchesPerRow); } }
+        int ExtraRows(int costume) { int n = Extras(costume).Count; return n == 0 ? 0 : (n + SwatchesPerRow - 1) / SwatchesPerRow; }
+        int ExtraRowHeight { get { return SwitchHeight + SwitchGap + SwatchHeight + NumberHeight + SwatchGap; } }
 
         public void Lay()
         {
-            int rows = StripRows;
-            Height = Math.Max(1, TilesHeight + (rows > 0 ? StripTitle + rows * (SwatchHeight + NumberHeight + SwatchGap) : 0));
+            int rows = StripRows, extra = Costumes.Count == 0 ? 0 : Costumes.Max(n => ExtraRows(n));
+            Height = Math.Max(1, TilesHeight + (rows > 0 || extra > 0 ? StripTitle + rows * (SwatchHeight + NumberHeight + SwatchGap) + (extra > 0 ? 6 + extra * ExtraRowHeight : 0) : 0));
             Invalidate();
         }
 
@@ -51,10 +61,11 @@ namespace ExMoreStuff
         {
             base.OnMouseMove(e);
             int at = At(e.Location);
-            if (at == hover) return;
+            bool overSwitch = switches.Any(s => s.Item1.Contains(e.Location));
+            if (at == hover) { Cursor = at >= 0 || overSwitch ? Cursors.Hand : Cursors.Default; return; }
             hover = at;
             if (at >= 0) shown = at;   // the colors stay on the last costume pointed at
-            Cursor = at >= 0 ? Cursors.Hand : Cursors.Default;
+            Cursor = at >= 0 || overSwitch ? Cursors.Hand : Cursors.Default;
             Invalidate();
         }
 
@@ -63,6 +74,8 @@ namespace ExMoreStuff
         protected override void OnMouseClick(MouseEventArgs e)
         {
             base.OnMouseClick(e);
+            var flip = switches.FirstOrDefault(s => s.Item1.Contains(e.Location));
+            if (flip != null) { flip.Item2.Switch(!flip.Item2.On()); Invalidate(); return; }   // an extra color on or off
             int at = At(e.Location);
             var clicked = Clicked;
             if (at >= 0 && clicked != null) clicked(Costumes[at]);
@@ -108,8 +121,10 @@ namespace ExMoreStuff
         // the colors of the costume last pointed at, numbered like the game's color select
         void PaintColors(Graphics g)
         {
-            if (StripRows == 0 || shown >= Costumes.Count) return;
+            switches.Clear();
+            if ((StripRows == 0 && Costumes.All(n => ExtraRows(n) == 0)) || shown >= Costumes.Count) return;
             int costume = Costumes[shown], count = CostumeArt.Colors(Fighter, costume), top = TilesHeight;
+            PaintExtras(g, costume, top + StripTitle + (count + SwatchesPerRow - 1) / SwatchesPerRow * (SwatchHeight + NumberHeight + SwatchGap) + (count > 0 ? 6 : NumberHeight + 10));
             Theme.Draw(g, CostumeName(costume) + "'s colors", Theme.Bold(10.5f), Theme.Text, new Rectangle(0, top, Width, StripTitle - 6),
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             if (count == 0)
@@ -136,6 +151,40 @@ namespace ExMoreStuff
                     Theme.Draw(g, c.ToString(), Theme.Font(8.5f), art != null ? Theme.Text : Theme.Off, new Rectangle(cell.X, cell.Bottom, cell.Width, NumberHeight),
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                 }
+            }
+        }
+
+        // the costume's extra colors from `top`: each a switch, its picture (dimmed while off) and its number in bold
+        void PaintExtras(Graphics g, int costume, int top)
+        {
+            var extras = Extras(costume);
+            for (int i = 0; i < extras.Count; i++)
+            {
+                Extra x = extras[i];
+                bool on = x.On();
+                int column = i % SwatchesPerRow, row = i / SwatchesPerRow, left = column * (SwatchWidth + SwatchGap), y = top + row * ExtraRowHeight;
+                var knob = new Rectangle(left + (SwatchWidth - SwitchWidth) / 2, y, SwitchWidth, SwitchHeight);
+                switches.Add(Tuple.Create(Rectangle.Inflate(knob, 4, 3), x));
+                using (var pill = Theme.Rounded(knob, SwitchHeight / 2f))
+                using (var fill = new SolidBrush(on ? Theme.Accent : Theme.Off)) g.FillPath(fill, pill);
+                int d = SwitchHeight - 6;
+                using (var white = new SolidBrush(Color.White)) g.FillEllipse(white, on ? knob.Right - 3 - d : knob.X + 3, knob.Y + 3, d, d);
+                var cell = new Rectangle(left, y + SwitchHeight + SwitchGap, SwatchWidth, SwatchHeight);
+                using (var path = Theme.Rounded(new RectangleF(cell.X + 0.5f, cell.Y + 0.5f, cell.Width - 1, cell.Height - 1), 6))
+                {
+                    using (var well = new SolidBrush(Theme.Well)) g.FillPath(well, path);
+                    Image art = x.Picture();
+                    if (art != null)
+                    {
+                        g.SetClip(path);
+                        Theme.Fit(g, art, cell, false);
+                        if (!on) using (var dim = new SolidBrush(Color.FromArgb(150, Theme.Well))) g.FillRectangle(dim, cell);   // off
+                        g.ResetClip();
+                    }
+                    using (var pen = new Pen(on ? Theme.Line : Theme.Off)) g.DrawPath(pen, path);
+                }
+                Theme.Draw(g, x.Number.ToString(), Theme.Bold(8.5f), on ? Theme.Text : Theme.Off, new Rectangle(cell.X, cell.Bottom, cell.Width, NumberHeight),
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
     }

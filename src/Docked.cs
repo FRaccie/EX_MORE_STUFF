@@ -68,7 +68,7 @@ namespace ExMoreStuff
         {
             if (paths.Count == 0) { if (File.Exists(ListPath)) File.Delete(ListPath); return; }
             Directory.CreateDirectory(Path.GetDirectoryName(ListPath));
-            File.WriteAllText(ListPath, new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "format", 1 }, { "files", paths } }));
+            SafeFile.WriteAllText(ListPath, new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "format", 1 }, { "files", paths } }), true);
         }
     }
 

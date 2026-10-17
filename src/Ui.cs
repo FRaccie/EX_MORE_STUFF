@@ -21,6 +21,7 @@ namespace ExMoreStuff
         public static readonly Color OnAccent = Color.FromArgb(26, 18, 6);
         public static readonly Color Update = Color.FromArgb(182, 108, 255);   // updates: the Browse Mods tab's dot and the Update buttons (user 2026-10-13)
         public static readonly Color Notify = Color.FromArgb(236, 84, 148);    // pink: Notifications with something to show (user 2026-10-14)
+        public static readonly Color Packs = Color.FromArgb(84, 160, 112);     // soft green: the Mod Packs button (user 2026-10-16)
         public static readonly Color Badge = Color.FromArgb(34, 160, 84);
         public static readonly Color OwnBadge = Color.FromArgb(48, 112, 214);   // the player's own mods (not GameBanana's)
         public static readonly Color GoodText = Color.FromArgb(120, 220, 150);
@@ -400,6 +401,7 @@ namespace ExMoreStuff
     {
         public string FighterName;
         public int Inactive, Active, Own;   // switched off; on, from GameBanana; on, added by the player
+        public int Colors;                  // extra colors switched on (color packs: user 2026-10-17, the pink bubble)
         bool hover;
         Image portrait;
         Bitmap scaled;          // the portrait at the tile's size, made once (not scaled again on every paint)
@@ -506,7 +508,8 @@ namespace ExMoreStuff
         const TextFormatFlags Centred = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding;
 
         // On the left, grey: switched off. On the right, green: switched on, from GameBanana; and left of it, blue:
-        // switched on, added by the player. Smaller when all three don't fit at full size.
+        // switched on, added by the player (costumes, not their extra colors). Smaller when all three don't fit at full
+        // size. Under them on the right, pink: extra colors switched on.
         void DrawBubbles(Graphics g)
         {
             for (int size = 0; size < 3; size++)   // full, smaller, smallest (three two-digit numbers)
@@ -520,14 +523,16 @@ namespace ExMoreStuff
                 float right = Width - margin;
                 if (Active > 0) { right -= width(Active); Bubble(g, Active, Theme.Badge, right, width(Active), height, font, true); right -= gap; }
                 if (Own > 0) { right -= width(Own); Bubble(g, Own, Theme.OwnBadge, right, width(Own), height, font, true); }
+                // pink, under them on the right: the extra colors switched on (a color pack of 10 colors: 10)
+                if (Colors > 0) Bubble(g, Colors, Theme.Notify, Width - margin - width(Colors), width(Colors), height, font, true, Active > 0 || Own > 0 ? 5 + height + gap + 2 : 5);
                 return;
             }
         }
 
         // A number in a pill, white (grey for switched off), with a dark ring keeping it off the portrait.
-        void Bubble(Graphics g, int number, Color fill, float x, int w, int h, Font font, bool on)
+        void Bubble(Graphics g, int number, Color fill, float x, int w, int h, Font font, bool on, float y = 5)
         {
-            var pill = new RectangleF(x, 5, w, h);
+            var pill = new RectangleF(x, y, w, h);
             using (var path = Theme.Rounded(pill, h / 2f))
             {
                 using (var brush = new SolidBrush(fill)) g.FillPath(brush, path);
@@ -696,11 +701,11 @@ namespace ExMoreStuff
     class PageButton : Clear
     {
         static readonly Color Blue = Color.FromArgb(92, 162, 250), BlueHover = Color.FromArgb(150, 200, 255);
-        static readonly Font Glyph = new Font("Segoe MDL2 Assets", 10f);
+        static readonly Font Glyph = new Font("Segoe MDL2 Assets", 12f);   // 20% larger (user 2026-10-16)
         public string Page;
         bool hover;
 
-        public PageButton() { Size = new Size(20, 24); Cursor = Cursors.Hand; }
+        public PageButton() { Size = new Size(24, 29); Cursor = Cursors.Hand; }
 
         protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
@@ -728,7 +733,9 @@ namespace ExMoreStuff
         public readonly string Link;
         bool hover;
 
-        public SupportButton(bool kofi, string link) { Kofi = kofi; Link = link; Size = new Size(20, 24); Cursor = Cursors.Hand; }
+        public SupportButton(bool kofi, string link) { Kofi = kofi; Link = link; Size = new Size(24, 29); Cursor = Cursors.Hand; }
+
+        const float Grow = 1.2f;   // the marks 20% larger than first drawn (user 2026-10-16)
 
         /// <summary>A creator's buttons, right to left (Patreon nearest the page icon, Ko-fi left of it); none for none.</summary>
         public static List<SupportButton> For(GameBanana.Support support)
@@ -762,7 +769,8 @@ namespace ExMoreStuff
         {
             Graphics g = e.Graphics;
             Smooth(g);
-            float cy = Height / 2f;
+            g.ScaleTransform(Grow, Grow);
+            float cy = Height / Grow / 2f;
             if (Kofi)
             {
                 // Ko-fi's mark (user 2026-10-14: "a white cup with a peach colored heart and a dark outline")
@@ -1074,13 +1082,21 @@ namespace ExMoreStuff
     }
 
     // A scrolling list whose background art stays put while the cards move. Its scroll bar is our own (ListSlider):
-    // Windows' can't take our colors, so ours lies over it.
+    // Windows' can't take our colors, so ours lies over it. The wheel glides (user 2026-10-17: "make the scroll bar
+    // smoother with the mouse in all the tabs. right now it like ticks down many pixels"): each notch slides WheelStep
+    // pixels over GlideMs, easing out, a notch during a glide adding to where it's going.
     class ScrollList : FlowLayoutPanel
     {
+        const int WheelStep = 60;    // pixels a notch of the wheel moves (user 2026-10-17: "make it 60"; Windows' own list jumped 120 at once)
+        const int GlideMs = 250;     // how long a notch takes to slide there (user 2026-10-17: at 100 "it doesnt glide that much")
         readonly ListSlider slider;
+        readonly System.Windows.Forms.Timer glide = new System.Windows.Forms.Timer { Interval = 10 };
+        readonly System.Diagnostics.Stopwatch clock = new System.Diagnostics.Stopwatch();
+        int glideFrom, glideTo;
 
         public ScrollList()
         {
+            glide.Tick += (s, e) => Glide();
             slider = new ListSlider(this);   // first: setting AutoScroll lays the list out already
             SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
             BackColor = Color.Transparent;
@@ -1089,7 +1105,32 @@ namespace ExMoreStuff
 
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Theme.DarkScrollBars(Handle); }
         protected override void OnScroll(ScrollEventArgs se) { Invalidate(true); base.OnScroll(se); slider.Follow(); }
-        protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); Invalidate(true); slider.Follow(); }
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            if (!VerticalScroll.Visible) { base.OnMouseWheel(e); return; }
+            Wheel(e.Delta);
+            var handled = e as HandledMouseEventArgs;
+            if (handled != null) handled.Handled = true;   // not passed on to a list this one sits in
+        }
+
+        /// <summary>A turn of the wheel (`delta` 120 a notch, a touchpad less): a glide that far.</summary>
+        public void Wheel(int delta)
+        {
+            int now = -AutoScrollPosition.Y;
+            glideFrom = now;
+            glideTo = Math.Max(0, Math.Min(Most, (glide.Enabled ? glideTo : now) - delta * WheelStep / 120));
+            clock.Restart();
+            glide.Start();
+        }
+
+        void Glide()
+        {
+            double t = Math.Min(1, clock.Elapsed.TotalMilliseconds / GlideMs), left = 1 - t;
+            Place(glideFrom + (int)Math.Round((glideTo - glideFrom) * (1 - left * left * left)));
+            if (t >= 1) glide.Stop();
+        }
+
+        int Most { get { return Math.Max(0, VerticalScroll.Maximum - VerticalScroll.LargeChange + 1); } }
         protected override void OnParentChanged(EventArgs e) { base.OnParentChanged(e); slider.Follow(); }
         protected override void OnLocationChanged(EventArgs e) { base.OnLocationChanged(e); slider.Follow(); }
         protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); slider.Follow(); }
@@ -1100,15 +1141,20 @@ namespace ExMoreStuff
         /// <summary>Scrolls to `y` (0 at the top), as dragging the bar does.</summary>
         public void ScrollTo(int y)
         {
-            int most = Math.Max(0, VerticalScroll.Maximum - VerticalScroll.LargeChange + 1);
-            AutoScrollPosition = new Point(-AutoScrollPosition.X, Math.Max(0, Math.Min(most, y)));
+            glide.Stop();
+            Place(y);
+        }
+
+        void Place(int y)
+        {
+            AutoScrollPosition = new Point(-AutoScrollPosition.X, Math.Max(0, Math.Min(Most, y)));
             Invalidate(true);
             slider.Follow();
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) slider.Dispose();
+            if (disposing) { glide.Dispose(); slider.Dispose(); }
             base.Dispose(disposing);
         }
     }
@@ -1191,7 +1237,7 @@ namespace ExMoreStuff
         protected override void OnMouseWheel(MouseEventArgs e)
         {
             base.OnMouseWheel(e);
-            list.ScrollTo(list.VerticalScroll.Value - e.Delta / 120 * SystemInformation.MouseWheelScrollLines * 20);
+            list.Wheel(e.Delta);   // as over the list itself
         }
 
         protected override void OnPaint(PaintEventArgs e)

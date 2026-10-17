@@ -21,12 +21,25 @@ namespace ExMoreStuff
         readonly ShadowLabel status = new ShadowLabel { Wrap = false, Height = ShadowLabel.LineHeight, Margin = new Padding(8, 0, 8, 4) };
         int filledWidth;
         bool stale, working;
+        // a search over the list (user 2026-10-16: "costume creation tab needs a search function"): every word in its name,
+        // fighter or zip; it stays put while the rows below it change
+        readonly TextBox search = new TextBox { Width = 220, BackColor = Theme.Well, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle, Font = Theme.Font(10.5f), Margin = new Padding(8, 2, 8, 6) };
+        readonly Timer typing = new Timer { Interval = 300 };
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
 
         public event Action<bool> Working;    // pictures being made (the rest of the window waits)
         public event Action<string> Changed;  // a package got new pictures (its key): the window reads its lists again
         public Func<string> Blocked;          // why nothing can be made right now, or null
 
-        public CreationPanel() { Controls.Add(list); }
+        public CreationPanel()
+        {
+            Controls.Add(list);
+            search.HandleCreated += (s, e) => SendMessage(search.Handle, 0x1501, (IntPtr)1, "Search costumes");   // EM_SETCUEBANNER: the grey hint
+            search.TextChanged += (s, e) => { typing.Stop(); typing.Start(); };
+            typing.Tick += (s, e) => { typing.Stop(); ShowRows(); };
+        }
 
         public void SetGame(string folder)
         {
@@ -47,19 +60,28 @@ namespace ExMoreStuff
             if (Visible && Math.Abs(list.ClientSize.Width - filledWidth) > 4) Fill();
         }
 
-        // costumes docked for edits (Docked: not in the game), then the player's own costume packages whose zip is there
+        // costumes docked for edits (Docked: not in the game) and the player's own costume packages whose zip is there, the
+        // newest first (user 2026-10-16: "the top list should be the newest ones you added or installed"): by when its zip was
+        // made (adding, installing or docking it makes it; color pictures go into the same zip and don't move it)
         List<Installed> Costumes()
         {
             if (!Game.IsGameFolder(game)) return new List<Installed>();
             return Docked.Load().Where(r => r.Item.IsCostume)
-                .Concat(Installer.Load(game).Where(r => r.Item.IsCostume && r.Source == "file" && !string.IsNullOrEmpty(r.Package) && File.Exists(r.Package))
-                    .OrderBy(r => Fighters.Name(r.Item.Fighter)).ThenBy(r => r.Item.Slot)).ToList();
+                .Concat(Installer.Load(game).Where(r => r.Item.IsCostume && r.Source == "file" && !string.IsNullOrEmpty(r.Package) && File.Exists(r.Package)))
+                .OrderByDescending(r => Made(r.Package)).ThenBy(r => Fighters.Name(r.Item.Fighter)).ThenBy(r => r.Item.Slot).ToList();
+        }
+
+        static DateTime Made(string zip)
+        {
+            try { return string.IsNullOrEmpty(zip) || !File.Exists(zip) ? DateTime.MinValue : File.GetCreationTimeUtc(zip); }
+            catch (Exception) { return DateTime.MinValue; }
         }
 
         static string DockedZip(Installed record) { return record.Source == Docked.Source ? record.Package : null; }
 
-        void Fill()
+        void Fill(bool keepPlace = false)
         {
+            Point place = list.AutoScrollPosition;
             stale = false;
             filledWidth = list.ClientSize.Width;
             int width = Math.Max(400, list.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 16);
@@ -70,24 +92,45 @@ namespace ExMoreStuff
                                  "your costume standing idle, as the game draws it (no stage, no life bars). They go into the costume's package for rollback games' " +   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                                  "character select, ready to share. Steam needs to be running and the game closed.", width),
             };
+            controls.Add(search);
             status.Width = width - 16;
             controls.Add(status);
-            var costumes = Costumes();
-            if (costumes.Count == 0) controls.Add(ShadowLabel.Note("No costume packages of your own yet: add one with Advanced > Add Mod From File (docked for edits, or " +
-                                                                  "into the game), or from Browse Mods.", width));
+            list.SuspendLayout();
+            foreach (Control c in list.Controls.Cast<Control>().ToList()) if (c is CreationRow) c.Dispose();
+            list.Controls.Clear();
+            foreach (Control c in controls) { list.Controls.Add(c); list.SetFlowBreak(c, true); }
+            list.ResumeLayout();
+            ShowRows();
+            // made again after something done here (a debug color, pictures): where it was (user 2026-10-16: "it pulls the list
+            // all the way to the top when its finished")
+            if (keepPlace) list.AutoScrollPosition = new Point(-place.X, -place.Y);
+        }
+
+        // the costumes the search finds, under the search box (the top stays, so typing goes on)
+        void ShowRows()
+        {
+            int width = Math.Max(400, list.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 16);
+            string[] words = search.Text.Trim().ToLowerInvariant().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            var all = Costumes();
+            var costumes = all.Where(r => words.All(w => (Weight.Name(r) + " " + Fighters.Name(r.Item.Fighter) + " " + Path.GetFileName(r.Package)).ToLowerInvariant().Contains(w))).ToList();
+            var rows = new List<Control>();
+            if (all.Count == 0) rows.Add(ShadowLabel.Note("No costume packages of your own yet: add one with Advanced > Add Mod From File (docked for edits, or " +
+                                                          "into the game), or from Browse Mods.", width));
+            else if (costumes.Count == 0) rows.Add(ShadowLabel.Note("No costumes match \"" + search.Text.Trim() + "\".", width));
             foreach (Installed record in costumes)
             {
                 var row = new CreationRow(Weight.Name(record) + (DockedZip(record) != null ? "   (docked)" : ""), Path.GetFileName(record.Package), Pictures(record), width) { Margin = new Padding(8, 4, 8, 4) };
                 Installed r = record;
                 row.Make.Click += async (s, e) => await Make(r, row.Colors);
                 row.FullSizeAsked += async color => await MakeFullSize(r, color);
+                row.ForceAsked += async color => await ForceDebug(r, color);
                 row.Busy = working;
-                controls.Add(row);
+                rows.Add(row);
             }
             list.SuspendLayout();
-            foreach (Control c in list.Controls.Cast<Control>().ToList()) if (c is CreationRow) c.Dispose();
-            list.Controls.Clear();
-            foreach (Control c in controls) { list.Controls.Add(c); list.SetFlowBreak(c, true); }
+            int keep = list.Controls.IndexOf(status) + 1;
+            while (list.Controls.Count > keep) { Control c = list.Controls[keep]; list.Controls.RemoveAt(keep); c.Dispose(); }
+            foreach (Control c in rows) { list.Controls.Add(c); list.SetFlowBreak(c, true); }
             list.ResumeLayout();
         }
 
@@ -151,7 +194,7 @@ namespace ExMoreStuff
             Say(name + ": " + (made.Count == 1 ? "color " + made.Keys.First() + "'s picture" : made.Count + " color pictures") + " made and put into its package");
             var changed = Changed;
             if (changed != null) changed(record.Item.Key);
-            Fill();
+            Fill(true);
             using (var preview = new PicturePreview(name + ": color pictures", made)) preview.ShowDialog(FindForm());
             // then its character's folder in Mods, its zip picked (user 2026-10-12): ready to share
             try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + record.Package + "\""); } catch (Exception) { }
@@ -178,6 +221,40 @@ namespace ExMoreStuff
             try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + file + "\""); } catch (Exception) { }
         }
 
+        // a color made a debug color (ColorVariants.Force): in its package, and in the game's files when it's in
+        async Task ForceDebug(Installed record, int color)
+        {
+            if (working) return;
+            bool inGame = DockedZip(record) == null;
+            if (inGame && Game.IsRunning()) { Say("Can't change it now: close the game first", true); return; }
+            string name = Weight.Name(record), g = game, problem = null;
+            if (MessageBox.Show(FindForm(), "Make color " + color + " of " + name + " a debug color? One of EX More Stuff's patterns takes the place of its textures, in its package" +
+                    (inGame ? " and in the game" : "") + ". Its own color " + color + " can only come back by installing the mod again.", "EX More Stuff",
+                    MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+            SetWorking(true);
+            try
+            {
+                await Task.Run(() =>
+                {
+                    var made = ColorVariants.Force(record.Package, record.Item.Prefix, color);
+                    if (!inGame) return;
+                    // the game's copies of those files (the record names where each went)
+                    foreach (string file in record.Files)
+                    {
+                        byte[] data;
+                        if (made.TryGetValue(Path.GetFileName(file), out data)) SafeFile.WriteAllBytes(Path.Combine(Game.PatchFolder(g), file), data);
+                    }
+                });
+            }
+            catch (Exception ex) { problem = ex.Message; }
+            finally { SetWorking(false); }
+            if (problem != null) { Say("Color " + color + " wasn't changed: " + problem, true); return; }
+            Say(name + ": color " + color + " is a debug color now");
+            var changed = Changed;
+            if (changed != null) changed(record.Item.Key);
+            Fill(true);
+        }
+
         void SetWorking(bool on)
         {
             working = on;
@@ -196,6 +273,7 @@ namespace ExMoreStuff
         public readonly FlatButton Make = new FlatButton("Make color pictures", true);
         readonly FlatButton all = new FlatButton("All");
         public event Action<int> FullSizeAsked;   // a color's right-click menu: that color at the game's own size
+        public event Action<int> ForceAsked;      // ... or that color made a debug color (user 2026-10-16: "right click > force debug color")
         readonly string title, detail;
         readonly Image[] pictures;
         readonly bool[] picked;
@@ -252,6 +330,9 @@ namespace ExMoreStuff
                 int color = i + 1;
                 full.Click += (s, a) => { var asked = FullSizeAsked; if (asked != null) asked(color); };
                 menu.Items.Add(full);
+                var force = new ToolStripMenuItem("Force debug color");
+                force.Click += (s, a) => { var asked = ForceAsked; if (asked != null) asked(color); };
+                menu.Items.Add(force);
                 menu.Closed += (s, a) => CharacterPicker.BeginDispose(menu);
                 menu.Show(this, e.Location);
                 return;

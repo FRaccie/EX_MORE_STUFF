@@ -54,6 +54,15 @@ namespace ExMoreStuff
             GameBanana.Save(again, path);
             Check(File.ReadAllText(path).Contains("\"name\":\"SFxT Tekken Crossovers\""), "and saved again with the list");
             Directory.Delete(args[0], true);
+            Console.WriteLine("A file's first 2 minutes (user 2026-10-15: \"it just breaks if you try using it\")");
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var young = new GameBanana.ModFile { Added = now - 30, Clean = true };
+            var passed = new GameBanana.ModFile { Added = now - 200, Clean = true };
+            var scanning = new GameBanana.ModFile { Added = now - 200, Checking = true };
+            Check(!young.Ready && young.Waiting && young.SettlesIn > 80 && young.SettlesIn <= 90, "passed 30 s ago: still checking, ready in about 90 s");
+            Check(passed.Ready && !passed.Waiting && passed.SettlesIn == 0, "passed, uploaded 200 s ago: offered");
+            Check(!scanning.Ready && scanning.Waiting, "GameBanana still scanning it: not offered");
+
             Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");
             Environment.Exit(failures == 0 ? 0 : 1);
         }

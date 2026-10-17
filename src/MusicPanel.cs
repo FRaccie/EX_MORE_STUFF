@@ -1,5 +1,6 @@
 // The Music page: pick where a song goes (a stage's theme, a fighter's theme, a custom stage's), open a song (WAV,
-// MP3, FLAC, M4A, WMA, or a game theme's .csb), set where it loops on the waveform (or let the finder suggest it),
+// MP3, FLAC, M4A, WMA, or a game theme's .csb), set where it loops on the waveform (the green line placed by hand, the
+// orange one stepped to the next or previous spot whose music matches it),
 // hear the loop's seam, and put it in the game. Unlike costumes and stages this acts at once: "Put in the game"
 // writes the file, "Give back the game's music" takes it away again.
 // A stage's music has three layers the game plays together and fades between (main; Ultra, when both players have
@@ -31,7 +32,6 @@ namespace ExMoreStuff
 
         // Songs longer than this aren't searched for a loop when they open (the search grows with the square of the
         // length: about 20 s at 10 minutes); Find the loop still does it.
-        const int AutoFindLimit = 8 * 60 * Song.Rate;
 
         string game;
         MusicSlot slot;                 // the row picked (round 1)
@@ -78,7 +78,9 @@ namespace ExMoreStuff
         readonly Label startLabel = MakeLabel(Theme.Bold(9f), Color.FromArgb(70, 210, 120)), endLabel = MakeLabel(Theme.Bold(9f), Theme.Accent);
         readonly TextBox startBox = DarkBox(92), endBox = DarkBox(92);
         readonly FlatButton startHere = Small("At cursor"), endHere = Small("At cursor");
-        readonly FlatButton find = Small("Find the loop"), fit = Small("Fit the end");
+        // no loop found by itself any more (user 2026-10-16: "remove the automatic looping thing. instead the user puts the
+        // green slider where they want the loop to be, then the orange slider can be ticked to find next closest match")
+        readonly FlatButton prevMatch = Small("Previous match"), nextMatch = Small("Next match"), fit = Small("Fit the end");
         readonly Label lengthLabel = MakeLabel(Theme.Font(9f), Theme.Muted), matchLabel = MakeLabel(Theme.Bold(9f), Theme.Text);
         readonly Toggle snap = new Toggle("Snap to zero") { Checked = true, Width = 124 },
                         loud = new Toggle("Match game volume") { Checked = true, Width = 164 },
@@ -91,8 +93,14 @@ namespace ExMoreStuff
         readonly Label ultraLabel = MakeLabel(Theme.Bold(9f), Theme.Text), lowLabel = MakeLabel(Theme.Bold(9f), Theme.Text), layerNote = MakeLabel(Theme.Font(8.5f), Theme.Muted);
         readonly Choice ultraMode = new Choice(UltraModes), lowMode = new Choice(LowModes);
         readonly FlatButton install = new FlatButton("Put in the game", true), restore = new FlatButton("Give back the game's music"), save = new FlatButton("Save");
+        // user 2026-10-16: a zip to upload (the song-mod format the Music tab and Browse Mods read), and the loop as an MP3
+        readonly FlatButton exportBanana = new FlatButton("Export for GameBanana"), exportLoop = new FlatButton("Export loop");
         readonly Label status = MakeLabel(Theme.Bold(9f), Theme.Text);
         readonly WavePlayer player = new WavePlayer();
+        // how loud it plays here only (user 2026-10-16: "a volume slider the same one from the music tab", then "just name it
+        // Preview Volume"): the Music tab's slider, 33% to begin with
+        readonly Slider listen = new Slider { Value = 0.33 };
+        readonly Label listenLabel = MakeLabel(Theme.Bold(9f), Theme.Text);
         readonly Timer timer = new Timer { Interval = 30 };
         readonly ToolTip tips = new ToolTip();
 
@@ -103,10 +111,10 @@ namespace ExMoreStuff
             Controls.AddRange(new Control[]
             {
                 title, now, openSfxt, openSong, openGame, songLabel, clock, wave, play, stop, testLoop, loop, bassPreview, gameLevel, whole, atStart, atEnd,
-                startLabel, startBox, startHere, endLabel, endBox, endHere, lengthLabel, find, fit, matchLabel, seam,
+                startLabel, startBox, startHere, endLabel, endBox, endHere, lengthLabel, prevMatch, nextMatch, fit, matchLabel, seam,
                 snap, loud, smooth, volumeLabel, quieter, volumeBox, louder, volumeNote,
                 roundLabel, round, layerLabel, layer, roundNote, ultraLabel, ultraMode, lowLabel, lowMode, layerNote,
-                install, restore, save, status,
+                install, restore, save, exportBanana, exportLoop, status,
             });
             startLabel.Text = "Start";
             endLabel.Text = "End";
@@ -129,15 +137,21 @@ namespace ExMoreStuff
             atEnd.Click += (s, e) => wave.ShowAround(wave.LoopEnd, 0.5);
             startHere.Click += (s, e) => { wave.LoopStart = (int)wave.CursorFrame; LoopChanged(); };
             endHere.Click += (s, e) => { wave.LoopEnd = (int)wave.CursorFrame; LoopChanged(); };
-            find.Click += async (s, e) => await FindLoop();
+            prevMatch.Click += async (s, e) => await Match(false);
+            nextMatch.Click += async (s, e) => await Match(true);
             fit.Click += (s, e) => FitEnd();
             snap.CheckedChanged += (s, e) => wave.Snap = snap.Checked;
             smooth.CheckedChanged += (s, e) => LoopChanged();
             loud.CheckedChanged += (s, e) => LoopChanged();
             bassPreview.CheckedChanged += (s, e) => { if (player.Playing) Play(Math.Max(0, player.Position), loop.Checked); };
-            gameLevel.CheckedChanged += (s, e) => player.Volume = (float)PlaybackGain();
-            quieter.Click += (s, e) => SetVolume(volumeDb - 1);
-            louder.Click += (s, e) => SetVolume(volumeDb + 1);
+            gameLevel.CheckedChanged += (s, e) => player.Volume = Loudness();
+            listen.Moved += () => player.Volume = Loudness();
+            listenLabel.Text = "Preview Volume";
+            listenLabel.TextAlign = ContentAlignment.MiddleRight;
+            Controls.AddRange(new Control[] { listen, listenLabel });
+            // the buttons show the value in the box even while it has the focus (user 2026-10-16: emptied, it stayed empty)
+            quieter.Click += (s, e) => { SetVolume(volumeDb - 1); ShowVolumeBox(); };
+            louder.Click += (s, e) => { SetVolume(volumeDb + 1); ShowVolumeBox(); };
             volumeBox.Leave += (s, e) => TypedVolume();
             volumeBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { TypedVolume(); e.SuppressKeyPress = true; } };
             round.Changed += () => { player.Stop(); ModesFromRecord(); UpdateEditor(); LoopChanged(); };
@@ -145,6 +159,8 @@ namespace ExMoreStuff
             install.Click += async (s, e) => await Install();
             restore.Click += (s, e) => Restore();
             save.Click += async (s, e) => await Save();
+            exportBanana.Click += async (s, e) => await ExportForGameBanana();
+            exportLoop.Click += async (s, e) => await ExportLoop();
             foreach (var box in new[] { startBox, endBox })
             {
                 var b = box;
@@ -168,7 +184,8 @@ namespace ExMoreStuff
             tips.SetToolTip(whole, "Zooms out to the whole song");
             tips.SetToolTip(atStart, "Zooms in on the loop start");
             tips.SetToolTip(atEnd, "Zooms in on the loop end");
-            tips.SetToolTip(find, "Looks for the longest part of the song that comes back, and loops on it");
+            tips.SetToolTip(nextMatch, "Moves the loop end (orange) to the next spot after it where the music matches what follows the loop start (green)");
+            tips.SetToolTip(prevMatch, "Moves the loop end (orange) back to the spot before it where the music matches what follows the loop start (green)");
             tips.SetToolTip(fit, "Moves the loop end a little (50 ms at most) so the music after it lines up with the loop start");
             tips.SetToolTip(snap, "A dragged loop marker goes to the nearest point (a few pixels at most) where the sound crosses zero, so the seam doesn't click. Hold Shift while dragging to place it freely");
             tips.SetToolTip(volumeBox, "Louder or quieter, in dB (6 dB is about twice as loud), on top of matching the game's volume");
@@ -177,6 +194,9 @@ namespace ExMoreStuff
             tips.SetToolTip(layer, "Main: the stage's theme. Ultra: when both players have half their Ultra gauge. Low health: when the timer is at 15 or someone's health is low");
             tips.SetToolTip(ultraMode, "This song: no change at Ultra.  Its own: a song put on the Ultra layer.  The game's: the stage's own Ultra music");
             tips.SetToolTip(lowMode, "This song: no change at low health.  Bass cut: this song with its bass turned down, in step.  Its own: a song put on the low-health layer.  The game's: the stage's own");
+            tips.SetToolTip(exportBanana, "Makes a zip to upload to GameBanana as a song mod: the game file this song makes for where it goes, as BGM_TRN.csb. " +
+                                          "Players get it on Browse Mods and pick it for any stage or fighter on the Music tab");
+            tips.SetToolTip(exportLoop, "Saves just the loop as an MP3 (from the green line to the orange one), for your own listening");
             tips.SetToolTip(save, "Keeps the song in your songs folder without putting it in the game: the song file, its loop and settings, and the game file it makes, named like TRN_3_MAIN_Jackson");
             tips.SetToolTip(wave, "Wheel: zoom.  Right or middle drag: scroll.  Click: play cursor.  Drag the green and orange lines: loop start and end (Shift: no snapping).");
             UpdateEditor();
@@ -314,24 +334,75 @@ namespace ExMoreStuff
             using (var dialog = new OpenFileDialog
             {
                 Title = "Open a song",
-                Filter = "Songs and game music (*.wav;*.mp3;*.flac;*.m4a;*.aac;*.wma;*.csb)|*.wav;*.mp3;*.flac;*.m4a;*.aac;*.wma;*.csb|All files (*.*)|*.*",
+                Filter = "Songs and game music (*.wav;*.mp3;*.flac;*.m4a;*.aac;*.wma;*.csb;*.zip)|*.wav;*.mp3;*.flac;*.m4a;*.aac;*.wma;*.csb;*.zip|All files (*.*)|*.*",
             })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 path = dialog.FileName;
             }
+            // a zip (user 2026-10-16: "the exact type of file we export cant be imported", Export for GameBanana's zip of
+            // BGM_*.csb): the song in it, picked from a menu when it holds more than one
+            string zipped = null, zipFile = null;
+            if (Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                List<string> inside;
+                try
+                {
+                    using (var zip = System.IO.Compression.ZipFile.OpenRead(path))
+                        inside = zip.Entries.Where(e => Regex.IsMatch(e.Name, @"\.(wav|mp3|flac|m4a|aac|wma|csb)$", RegexOptions.IgnoreCase)).Select(e => e.FullName).ToList();
+                }
+                catch (Exception ex) { Say(Path.GetFileName(path) + " couldn't be opened: " + ex.Message, true); return; }
+                if (inside.Count == 0) { Say("There's no song in " + Path.GetFileName(path), true); return; }
+                zipFile = path;
+                zipped = inside.Count == 1 ? inside[0] : await PickFromZip(inside);
+                if (zipped == null) return;
+                path = zipped;
+            }
             Song loaded = null;
-            LoopSuggestion found = null;
+            double? stored = null;   // a bank of ours: the Volume it was exported with
+            int fileUltra = -1, fileLow = -1;   // ... and what its Ultra and Low health play
             bool bank = Path.GetExtension(path).Equals(".csb", StringComparison.OrdinalIgnoreCase);
             if (!await Run("Opening " + Path.GetFileName(path), () =>
             {
+                if (zipFile != null)
+                {
+                    byte[] data;
+                    using (var zip = System.IO.Compression.ZipFile.OpenRead(zipFile))
+                    using (Stream s = zip.GetEntry(zipped).Open())
+                    using (var copy = new MemoryStream()) { s.CopyTo(copy); data = copy.ToArray(); }
+                    if (bank)
+                    {
+                        int zls;
+                        // named for the zip (Export for GameBanana names it for the song; the BGM_TRN inside is only the slot it
+                        // was made for, user 2026-10-16: "it shows the wrong name. it shows the stage name")
+                        string named = Regex.IsMatch(Path.GetFileName(zipped), @"^BGM_", RegexOptions.IgnoreCase) ? Path.GetFileNameWithoutExtension(zipFile).Trim() : Path.GetFileNameWithoutExtension(zipped);
+                        loaded = MusicBank.Decode(data, 0, named, out zls);
+                        loaded.LoopStart = zls;
+                        loaded.LoopEnd = loaded.Frames;
+                        loaded.GameLoop = true;
+                        stored = StoredVolume(data, Path.GetFileName(zipped), loaded.Pcm);
+                        LayersOf(data, Path.GetFileName(zipped), loaded.Pcm, out fileUltra, out fileLow);
+                        return;
+                    }
+                    // an audio file: read from a copy in EX More Stuff's own folder (Windows' decoders want a file), gone after
+                    string temp = Path.Combine(AppFolders.Root, "opening", Path.GetFileName(zipped));
+                    Directory.CreateDirectory(Path.GetDirectoryName(temp));
+                    File.WriteAllBytes(temp, data);
+                    try { loaded = AudioFile.Load(temp); }
+                    finally { try { Directory.Delete(Path.GetDirectoryName(temp), true); } catch (Exception) { } }
+                    if (loaded.Frames < Song.Rate) throw new InvalidDataException(Path.GetFileName(zipped) + " is shorter than a second");
+                    return;
+                }
                 if (bank)
                 {
                     int ls;
-                    loaded = MusicBank.Decode(File.ReadAllBytes(path), 0, Path.GetFileNameWithoutExtension(path), out ls);
+                    byte[] data = File.ReadAllBytes(path);
+                    loaded = MusicBank.Decode(data, 0, Path.GetFileNameWithoutExtension(path), out ls);
                     loaded.LoopStart = ls;
                     loaded.LoopEnd = loaded.Frames;
                     loaded.GameLoop = true;
+                    stored = StoredVolume(data, Path.GetFileName(path), loaded.Pcm);
+                    LayersOf(data, Path.GetFileName(path), loaded.Pcm, out fileUltra, out fileLow);
                 }
                 else
                 {
@@ -341,17 +412,105 @@ namespace ExMoreStuff
                     int kls, kle; string kept;
                     if (loaded.LoopStart < 0 && MusicBank.ReadKept(path, out kls, out kle, out kept) && kle <= loaded.Frames)
                     { loaded.LoopStart = kls; loaded.LoopEnd = kle; loaded.Settings = kept; }
-                    if (loaded.LoopStart < 0 && loaded.Frames <= AutoFindLimit) found = LoopFinder.Find(loaded.Pcm);
                 }
             })) return;
+            // a new song starts at volume 0 (user 2026-10-16: "it should always reset to 0"); one saved with its settings gets its own
+            // back, and a bank of ours the Volume it was exported with (matched, as it was made)
+            // Ultra and Low health start on This song (user 2026-10-17: "nothing there should be ticked by default, unless this song can
+            // be default"; the slot's song's own choices used to stay on a new one); a bank of ours or saved settings set them below
+            ultraMode.Selected = 0;
+            lowMode.Selected = 0;
+            SetVolume(stored ?? 0);
+            if (stored != null) loud.Checked = true;
+            if (fileUltra >= 0) ultraMode.Selected = fileUltra;
+            if (fileLow >= 0) lowMode.Selected = fileLow;
+            ShowVolumeBox();
             if (loaded.Settings != null) ApplySettings(loaded.Settings);
-            songFile = bank ? null : path;
-            SetSong(loaded, found != null ? found.Start : Math.Max(0, loaded.LoopStart), found != null ? found.End : loaded.LoopEnd > 0 ? loaded.LoopEnd : loaded.Frames);
-            if (found != null) SayFound(found);
-            else if (bank) Say("Opened " + loaded.Name + " with the game's own loop");
+            songFile = bank || zipFile != null ? null : path;
+            // its own loop (a game theme's, SFxT's, a song saved with one), else the whole song until the green line is placed
+            SetSong(loaded, Math.Max(0, loaded.LoopStart), loaded.LoopEnd > 0 ? loaded.LoopEnd : loaded.Frames);
+            if (bank) Say("Opened " + loaded.Name + " with the game's own loop" + (stored != null ? " and the volume it was made with (" + stored.Value.ToString("+0.0;-0.0;+0.0", CultureInfo.InvariantCulture) + ")" : ""));
             else if (loaded.LoopStart < 0 && loaded.Frames > MusicBank.LongestSong) Say("Opened " + loaded.Name + ": songs in the game can be at most 10 minutes long", true);
-            else if (loaded.LoopStart < 0) Say("Opened " + loaded.Name + ", a long song: press Find the loop to look for its loop (it takes a while)");
+            else if (loaded.LoopStart < 0) Say("Opened " + loaded.Name + ": put the green line where the loop starts, then Next match for its end");
             else Say("Opened " + loaded.Name + " with its saved loop" + (loaded.Settings != null ? " and settings" : ""));
+        }
+
+        // The Volume a bank of ours was exported with, read back (user 2026-10-16: "can you make it so on import it knows my DB
+        // change"): matched, its bank plays the song at TypicalHeard + Volume, so it's the bank's level against the song's own
+        // loudness (one file alone, nothing compared with others). Null when it plays at the game's own level for its slot
+        // (the game's file, or one made without matching) or the result isn't one EX More Stuff would make. A step near
+        // a half is taken as that half (the song's loudness after packing is off by about 0.1).
+        double? StoredVolume(byte[] bankBytes, string fileName, short[] pcm)
+        {
+            try
+            {
+                double level = MusicBank.MixGain(bankBytes, 0);
+                string own = game != null ? MusicBank.GameFile(game, fileName) : null;
+                if (own != null && Math.Abs(MusicBank.MixGain(File.ReadAllBytes(own), 0) - level) < 0.002) return null;
+                double v = 20 * Math.Log10(level) - TypicalHeard[0] + MusicBank.Loudness(pcm);
+                if (double.IsNaN(v) || Math.Abs(v) > 24) return null;
+                double half = Math.Round(v * 2) / 2;
+                v = Math.Abs(v - half) <= 0.15 ? half : Math.Round(v, 1);
+                return v == 0 ? 0 : v;
+            }
+            catch (Exception) { return null; }
+        }
+
+        // What a bank's Ultra (cue 1) and Low health (cue 2) play, read from the file (user 2026-10-16: the switches still
+        // showed Bass cut on songs made without it): the song's own sound -> This song; the low health one as long as it
+        // with far less low end -> Bass cut; the slot's sound in the game's own file -> The game's; else Its own. -1: not known.
+        void LayersOf(byte[] data, string fileName, short[] main, out int ultra, out int low)
+        {
+            ultra = low = -1;
+            byte[] own = null;
+            try { string g = game != null ? MusicBank.GameFile(game, fileName) : null; if (g != null) own = File.ReadAllBytes(g); }
+            catch (Exception) { }
+            Func<byte[], int, short[]> sound = (b, cue) =>
+            {
+                try { int x; return MusicBank.Decode(b, cue, "", out x).Pcm; }
+                catch (Exception) { return null; }
+            };
+            Func<short[], short[], bool> same = (a, b) => a != null && b != null && a.Length == b.Length && a.SequenceEqual(b);
+            for (int cue = 1; cue <= 2; cue++)
+            {
+                short[] pcm = sound(data, cue);
+                if (pcm == null) continue;
+                int pick;
+                if (same(pcm, main)) pick = 0;
+                else if (own != null && same(pcm, sound(own, cue))) pick = cue == 1 ? 2 : 3;
+                else if (cue == 2 && Math.Abs(pcm.Length - main.Length) < Song.Rate && LowEnd(pcm) < LowEnd(main) / 3) pick = 1;
+                else pick = cue == 1 ? 1 : 2;
+                if (cue == 1) ultra = pick; else low = pick;
+            }
+        }
+
+        // the share of a sound's energy under about 150 Hz
+        static double LowEnd(short[] pcm)
+        {
+            double a = Math.Exp(-2 * Math.PI * 150 / Song.Rate), y = 0, lowSum = 0, all = 0;
+            for (int i = 0; i + 1 < pcm.Length; i += 2)
+            {
+                double x = (pcm[i] + pcm[i + 1]) / 2.0;
+                y = (1 - a) * x + a * y;
+                lowSum += y * y;
+                all += x * x;
+            }
+            return all > 0 ? lowSum / all : 0;
+        }
+
+        // the song to open from a zip holding several (its files by their paths inside), or null when none was picked
+        Task<string> PickFromZip(List<string> inside)
+        {
+            var picked = new TaskCompletionSource<string>();
+            ContextMenuStrip menu = DarkMenu.Create();
+            foreach (string name in inside.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            {
+                string n = name;
+                menu.Items.Add(new ToolStripMenuItem(n, null, (s, e) => picked.TrySetResult(n)));
+            }
+            menu.Closed += (s, e) => BeginInvoke((Action)(() => { picked.TrySetResult(null); menu.Dispose(); }));
+            menu.Show(Cursor.Position);
+            return picked.Task;
         }
 
         // Street Fighter X Tekken's music (the player's own SFxT, read only): a menu of its banks, the stages first, each
@@ -408,6 +567,7 @@ namespace ExMoreStuff
             if (!await Run("Opening " + name + " from Street Fighter X Tekken", () => loaded = SfxtMusic.Load(bank, cue))) return;
             songFile = null;
             bool looped = loaded.LoopStart >= 0;
+            SetVolume(0); ultraMode.Selected = 0; lowMode.Selected = 0; ShowVolumeBox();   // a new song: volume 0, Ultra and Low health This song
             SetSong(loaded, Math.Max(0, loaded.LoopStart), looped ? loaded.LoopEnd : loaded.Frames);
             Say("Opened " + name + " from Street Fighter X Tekken" + (looped ? " with its own loop" : ""));
         }
@@ -439,6 +599,7 @@ namespace ExMoreStuff
             loaded.LoopStart = ls;
             loaded.LoopEnd = loaded.Frames;
             loaded.GameLoop = true;
+            SetVolume(0); ultraMode.Selected = 0; lowMode.Selected = 0; ShowVolumeBox();   // a new song: volume 0, Ultra and Low health This song
             SetSong(loaded, ls, loaded.Frames);
             Say("This is what the game plays for " + name + (ours ? " now (from patch_ae2_tu3)" : ""));
         }
@@ -482,26 +643,21 @@ namespace ExMoreStuff
         }
 
         // -- the loop --------------------------------------------------------------------------------------------------
-        async Task FindLoop()
+        // the loop end stepped to the next (or previous) spot whose music matches what follows the loop start
+        async Task Match(bool forward)
         {
             if (song == null) return;
-            LoopSuggestion found = null;
-            if (!await Run("Finding the loop", () => found = LoopFinder.Find(song.Pcm))) return;
+            int start = wave.LoopStart, from = wave.LoopEnd, end = -1;
+            if (!await Run("Looking for a match", () => end = LoopFinder.MatchEnd(song.Pcm, start, from, forward))) return;
+            if (end < 0)
+            {
+                Say(forward ? "No match after the orange line: move the green line, or the orange one back" : "No match before the orange line", true);
+                return;
+            }
             player.Stop();
-            wave.LoopEnd = song.Frames;
-            wave.LoopStart = found.Start;
-            wave.LoopEnd = found.End;
+            wave.LoopEnd = end;
             LoopChanged();
-            SayFound(found);
-        }
-
-        void SayFound(LoopSuggestion found)
-        {
-            if (found.Repeat)
-                Say(string.Format("Loop found: {0} to {1}. Press Test the loop to hear the seam", WaveformView.Time(found.Start / (double)Song.Rate),
-                    WaveformView.Time(found.End / (double)Song.Rate)));
-            else
-                Say("Nothing in this song comes back, so it loops whole. Set the loop by hand, or keep Smooth the seam on");
+            Say(string.Format("Loop end at {0}, matching the loop start. Press Test the loop to hear the seam", WaveformView.Time(end / (double)Song.Rate)));
         }
 
         void FitEnd()
@@ -581,6 +737,8 @@ namespace ExMoreStuff
             if (song != null) LoopChanged();
         }
 
+        void ShowVolumeBox() { volumeBox.Text = volumeDb.ToString("+0.0;-0.0;0.0", CultureInfo.InvariantCulture); }
+
         void TypedVolume()
         {
             double v;
@@ -591,6 +749,9 @@ namespace ExMoreStuff
         // "In game": the level the game plays the layer heard (the low-health one while Bass cut is on) at, from the
         // slot's music file's mix (read once per bank and layer); 1 with the switch off
         readonly Dictionary<string, double> mixGains = new Dictionary<string, double>();
+        // what it plays at here: as in the game (or not), times the listening slider
+        float Loudness() { return (float)(PlaybackGain() * listen.Value); }
+
         double PlaybackGain()
         {
             var t = Target;
@@ -641,7 +802,10 @@ namespace ExMoreStuff
         {
             if (song == null) { volumeNote.Text = ""; return; }
             double gain = Gain(), over = 20 * Math.Log10(songPeak * gain / MusicBank.Ceiling);
-            volumeNote.Text = string.Format("x{0:0.00}", gain);
+            // the total heard (user 2026-10-16: "the number on the right should update so that it shows the current total"):
+            // matched, the Volume goes on the bank's level for the layer rather than on the song itself, so it's shown on top
+            double total = loud.Checked ? gain * Math.Pow(10, volumeDb / 20) : gain;
+            volumeNote.Text = string.Format("x{0:0.00}", total);
             volumeNote.ForeColor = over > 6 ? Theme.Warning : Theme.Muted;
             tips.SetToolTip(volumeNote, over <= 0.05 ? "Its volume, times the song's own" : string.Format(
                 "Its loudest peaks are held down {0:0.0} dB so they don't clip{1}", over, over > 6 ? ": that's a lot, so turn it down a little for a cleaner sound" : ""));
@@ -672,7 +836,7 @@ namespace ExMoreStuff
         void Play(long from, bool looping)
         {
             if (song == null) return;
-            player.Volume = (float)PlaybackGain();
+            player.Volume = Loudness();
             try { player.Play(Preview(bassPreview.Checked), from, looping, wave.LoopStart, wave.LoopEnd); }
             catch (Exception ex) { Say(ex.Message, true); }
         }
@@ -807,6 +971,93 @@ namespace ExMoreStuff
         }
 
         // Save: kept in the songs folder (overwriting) as Put in the game keeps it, without putting it in
+        // the song as a song mod to upload (user 2026-10-16: "export csb in a manner for users to upload music"): a zip of
+        // the game file it makes for the slot, built as Put in the game builds it but on the slot's own music (not on a
+        // song of ours there), BGM_<code>.csb inside, which the Music tab and Browse Mods read as a song
+        async Task ExportForGameBanana()
+        {
+            var target = Target;
+            if (song == null || target == null) return;
+            if (docked != null || MusicBank.GameFile(game, target.TemplateFile) == null) { Say("Pick one of the game's stages or fighters for it first", true); return; }
+            string path;
+            using (var ask = new SaveFileDialog { Filter = "Zip (*.zip)|*.zip", FileName = Clean(song.Name) + ".zip", Title = "Export for GameBanana" })
+            {
+                if (ask.ShowDialog(FindForm()) != DialogResult.OK) return;
+                path = ask.FileName;
+            }
+            // a picture for its card (user 2026-10-17: "make it ask for an image": GameBanana's Sounds section takes none, so
+            // Browse Mods shows the one in the zip); none picked: the zip goes without
+            string picture = null;
+            using (var pick = new OpenFileDialog { Filter = "Pictures (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg", Title = "A picture for its card (a wide one fits best, such as 1280 x 720)" })
+                if (pick.ShowDialog(FindForm()) == DialogResult.OK) picture = pick.FileName;
+            player.Stop();
+            var pcm = Preview(false);
+            int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
+            string name = song.Name, g = game, preview = Path.ChangeExtension(path, ".mp3");
+            var levels = Levels();
+            if (!await Run("Exporting " + name, () =>
+            {
+                InstalledSong about;
+                byte[] bank = BuildFor(g, new Dictionary<string, InstalledSong>(), target, layerIndex, pcm, ls, le, name, ultra, low, levels, out about);
+                if (File.Exists(path)) File.Delete(path);
+                using (var zip = System.IO.Compression.ZipFile.Open(path, System.IO.Compression.ZipArchiveMode.Create))
+                {
+                    using (Stream s = zip.CreateEntry(target.InRound(1).File).Open()) s.Write(bank, 0, bank.Length);   // round 1's name: a song, whatever round it was made on
+                    if (picture != null) System.IO.Compression.ZipFileExtensions.CreateEntryFromFile(zip, picture, Path.GetFileName(picture));
+                }
+                // the preview GameBanana's Sounds section asks for (user 2026-10-17: "export the 5 second mp3 next to the zip")
+                MediaFoundation.EncodeMp3(preview, PreviewClip(pcm));
+            })) return;
+            Say("Exported " + Path.GetFileName(path) + (picture != null ? " with its picture" : "") + " and its 5-second preview " + Path.GetFileName(preview) + ": upload them to GameBanana as they are");
+        }
+
+        // 5 seconds of a song from 30 seconds in (the Music tab's listening spot; the end's last 5 seconds when it's shorter),
+        // faded in and out over 40 ms so it doesn't click
+        static short[] PreviewClip(short[] pcm)
+        {
+            int frames = pcm.Length / 2, length = Math.Min(5 * Song.Rate, frames), at = Math.Max(0, Math.Min(30 * Song.Rate, frames - length));
+            var clip = new short[length * 2];
+            Array.Copy(pcm, at * 2, clip, 0, clip.Length);
+            int fade = Math.Min(Song.Rate * 40 / 1000, length / 2);
+            for (int i = 0; i < fade; i++)
+            {
+                double g = i / (double)fade;
+                for (int c = 0; c < 2; c++)
+                {
+                    clip[i * 2 + c] = (short)(clip[i * 2 + c] * g);
+                    clip[(length - 1 - i) * 2 + c] = (short)(clip[(length - 1 - i) * 2 + c] * g);
+                }
+            }
+            return clip;
+        }
+
+        // just the loop as an MP3 (user 2026-10-16: "the exported mp3 should just be the loop"), as it would go in
+        // (seam smoothed, volume set), through Windows' own MP3 encoder
+        async Task ExportLoop()
+        {
+            if (song == null) return;
+            string path;
+            using (var ask = new SaveFileDialog { Filter = "MP3 (*.mp3)|*.mp3", FileName = Clean(song.Name) + " (loop).mp3", Title = "Export loop" })
+            {
+                if (ask.ShowDialog(FindForm()) != DialogResult.OK) return;
+                path = ask.FileName;
+            }
+            player.Stop();
+            var pcm = Preview(false);
+            int ls = wave.LoopStart, le = Math.Min(wave.LoopEnd, pcm.Length / 2);
+            if (le - ls < Song.Rate) { Say("The loop must be at least a second long", true); return; }
+            var loopPart = new short[(le - ls) * 2];
+            Array.Copy(pcm, ls * 2, loopPart, 0, loopPart.Length);
+            if (!await Run("Exporting the loop", () => MediaFoundation.EncodeMp3(path, loopPart))) return;
+            Say("Exported the loop to " + Path.GetFileName(path));
+        }
+
+        static string Clean(string name)
+        {
+            foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            return name.Trim();
+        }
+
         async Task Save()
         {
             var target = Target;
@@ -827,6 +1078,8 @@ namespace ExMoreStuff
             })) return;
             Say("Saved as " + kept + " in your songs folder (the Music folder button at the bottom)");
             Toast.Show(this, "Songs saved to disk");   // always "songs" (user)
+            var saved = Saved;
+            if (saved != null) saved();   // under Your songs on the Music tab: only yours, nothing shared
         }
 
         void Restore()
@@ -916,7 +1169,7 @@ namespace ExMoreStuff
             else roundNote.Text = "";
 
             bool has = song != null;
-            foreach (var c in new Control[] { play, stop, testLoop, bassPreview, whole, atStart, atEnd, startBox, endBox, startHere, endHere, find, fit, save })
+            foreach (var c in new Control[] { play, stop, testLoop, bassPreview, whole, atStart, atEnd, startBox, endBox, startHere, endHere, prevMatch, nextMatch, fit, save, exportBanana, exportLoop })
                 c.Enabled = has;
             install.Enabled = has && t != null && listProblem == null;
             install.Text = Layer > 0 ? "Put on the " + MusicBank.LayerNames[Layer] + " layer" : docked != null ? "Put in the docked file" : "Put in the game";
@@ -925,7 +1178,7 @@ namespace ExMoreStuff
             foreach (var b in new[] { install, restore }) b.Width = TextRenderer.MeasureText(b.Text, b.Font).Width + 36;   // the docked wording is longer
             openGame.Enabled = t != null;
             if (!has) { startBox.Text = endBox.Text = lengthLabel.Text = matchLabel.Text = volumeNote.Text = ""; seam.Show(null, 0, 0); }
-            player.Volume = (float)PlaybackGain();   // the slot, layer or Bass cut may have changed
+            player.Volume = Loudness();   // the slot, layer or Bass cut may have changed
             ShowClock();
             LayOut();
         }
@@ -947,6 +1200,7 @@ namespace ExMoreStuff
 
         // runs slow work away from the window, which stays drawn but can't be used meanwhile
         public event Action<bool> Working;   // slow work started or ended (the rest of the window waits)
+        public event Action Saved;           // a song saved to your songs (the Music tab lists it at once, user 2026-10-17)
 
         async Task<bool> Run(string what, Action work)
         {
@@ -990,9 +1244,12 @@ namespace ExMoreStuff
             gameLevel.Location = new Point(clock.Left - gameLevel.Width - 10, 57);
             songLabel.Bounds = new Rectangle(x, 60, gameLevel.Left - x - 10, 20);
 
-            const int below = 282;
-            int wh = Math.Max(120, h - 86 - below);
-            wave.Bounds = new Rectangle(x, 84, ew, wh);
+            // Preview Volume on a line of its own
+            listen.Bounds = new Rectangle(right - 140, 84, 140, 20);
+            listenLabel.Bounds = new Rectangle(listen.Left - 120, 82, 116, 24);
+            const int below = 322;   // (40 of it: the export buttons' line, user 2026-10-16)
+            int wh = Math.Max(120, h - 110 - below);
+            wave.Bounds = new Rectangle(x, 108, ew, wh);
             int y = wave.Bottom + 8;
             play.Location = new Point(x, y);
             stop.Location = new Point(play.Right + 6, y);
@@ -1013,8 +1270,9 @@ namespace ExMoreStuff
             endBox.Location = new Point(endLabel.Right, y + 2);
             endHere.Location = new Point(endBox.Right + 6, y);
             y += 38;
-            find.Location = new Point(x, y);
-            fit.Location = new Point(find.Right + 6, y);
+            prevMatch.Location = new Point(x, y);
+            nextMatch.Location = new Point(prevMatch.Right + 6, y);
+            fit.Location = new Point(nextMatch.Right + 6, y);
             matchLabel.Bounds = new Rectangle(fit.Right + 14, y, 140, 30);
             lengthLabel.Bounds = new Rectangle(x, y + 32, seam.Left - x - 10, 18);
             y += 54;
@@ -1039,9 +1297,16 @@ namespace ExMoreStuff
             lowMode.Location = new Point(lowLabel.Right, y);
             layerNote.Bounds = new Rectangle(x, y, ew, 28);
             y += 38;
+            // the export buttons on a line of their own, above the others (the row had no room for them)
+            exportBanana.Location = new Point(right - exportBanana.Width, y);
+            exportLoop.Location = new Point(exportBanana.Left - exportLoop.Width - 8, y);
+            y += 40;
+            // Put in the game / Give back the game's music: gone (user 2026-10-16: the Music tab puts songs in now); a docked
+            // stage keeps them, as Put in / Take it out of the docked file (the zip to upload)
+            install.Visible = restore.Visible = docked != null;
             install.Location = new Point(right - install.Width, y);
             restore.Location = new Point(install.Left - restore.Width - 8, y);
-            save.Location = new Point(restore.Left - save.Width - 8, y);
+            save.Location = new Point(docked != null ? restore.Left - save.Width - 8 : right - save.Width, y);
             status.Bounds = new Rectangle(x, y, save.Left - x - 12, 36);
         }
 

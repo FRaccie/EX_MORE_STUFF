@@ -39,7 +39,9 @@ namespace ExMoreStuff
             string path = ListPath(game);
             if (!File.Exists(path)) return result;
             var json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-            var root = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path));
+            // the list, or the one before it when a crash left it unreadable (SafeFile)
+            string text = SafeFile.ReadList(path, t => { try { json.Deserialize<Dictionary<string, object>>(t); return true; } catch (Exception) { return false; } });
+            var root = json.Deserialize<Dictionary<string, object>>(text);
             object list;
             if (root != null && root.TryGetValue(name, out list) && list is System.Collections.ArrayList)
                 foreach (object entry in (System.Collections.ArrayList)list)
@@ -73,10 +75,10 @@ namespace ExMoreStuff
             };
             var json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
             Directory.CreateDirectory(Game.PatchFolder(game));
-            File.WriteAllText(ListPath(game), json.Serialize(new Dictionary<string, object>
+            SafeFile.WriteAllText(ListPath(game), json.Serialize(new Dictionary<string, object>
             {
                 { "format", 1 }, { "installed", records.Select(entry).ToList() }, { "removed", removed.Select(entry).ToList() },
-            }));
+            }), true);
         }
 
         // A stage's own music (optional): BGM_<code>.csb, a CRI sound bank laid out like the game's stage themes (3
@@ -114,7 +116,7 @@ namespace ExMoreStuff
             record.Files.RemoveAll(f => string.Equals(f, relative, StringComparison.OrdinalIgnoreCase));
             if (string.IsNullOrEmpty(record.Shown)) { if (File.Exists(path)) File.Delete(path); return; }
             Directory.CreateDirectory(Path.GetDirectoryName(path));
-            File.WriteAllText(path, record.Shown, new UTF8Encoding(false));
+            SafeFile.WriteAllText(path, record.Shown);
             record.Files.Add(relative);
         }
 
@@ -205,7 +207,7 @@ namespace ExMoreStuff
             {
                 await Catalog.Fetch(item.Download, temp, progress);
                 if (item.Size > 0 && new FileInfo(temp).Length != item.Size)
-                    throw new InvalidDataException("the download is incomplete (" + new FileInfo(temp).Length + " of " + item.Size + " bytes)");
+                    throw new InvalidDataException("the download is incomplete (" + StoragePanel.Megabytes(new FileInfo(temp).Length) + " of " + StoragePanel.Megabytes(item.Size) + ")");
                 if (!string.IsNullOrEmpty(item.Sha256) && Sha256(temp) != item.Sha256)
                     throw new InvalidDataException("the download doesn't match the catalog's fingerprint");
                 InstallPackage(game, item, temp, "catalog");
@@ -255,7 +257,7 @@ namespace ExMoreStuff
                 {
                     string target = Path.Combine(FolderFor(game, item, e.Name), e.Name);
                     Directory.CreateDirectory(Path.GetDirectoryName(target));
-                    e.ExtractToFile(target, true);
+                    SafeFile.Extract(e, target);   // each file whole or not at all
                     record.Files.Add(target.Substring(patch.Length + 1));
                 }
                 WriteName(game, record);

@@ -25,6 +25,11 @@ namespace ExMoreStuff
         // its model may need them (Juri gótica crashed without hers, user 2026-10-13: "dont install and why")
         static readonly Regex MovesFile = new Regex(@"^([A-Za-z]{3})\.(bac|bcm)$", RegexOptions.IgnoreCase);
 
+        /// <summary>The user's own test switch (2026-10-16: "enable it just for my version ... without the moves"):
+        /// allow_move_mods.txt in EX More Stuff's folder lets skins with move files go in as costumes, their move files left
+        /// out (they're never unpacked). Nobody else has the file. TEST ONLY: take out before a release unless the user says.</summary>
+        public static bool AllowMoveMods { get { try { return System.IO.File.Exists(System.IO.Path.Combine(AppFolders.Root, "allow_move_mods.txt")); } catch (Exception) { return false; } } }
+
         /// <summary>Why a mod with these files can't go in as costumes: "it changes Juri's moves too"; null when it doesn't.</summary>
         public static string ChangesMoves(IEnumerable<string> paths)
         {
@@ -194,7 +199,8 @@ namespace ExMoreStuff
             // the game crashes on it (Juri gótica: 361 bones on her Original's 252, user 2026-10-13). One with its own
             // physics is fine (the SFxT ports: Cammy X Lili's 302 on Cammy's 224).
             byte[] model;
-            if (costume.Parts.TryGetValue(".obj.emo", out model) && !costume.Parts.ContainsKey(".bsr"))
+            // (the user's test switch skips this check too, 2026-10-16: to find out whether the bones are really the cause)
+            if (costume.Parts.TryGetValue(".obj.emo", out model) && !costume.Parts.ContainsKey(".bsr") && !AllowMoveMods)
             {
                 string under = GameFile(game, costume.Fighter, from + ".obj.emo");
                 int bones = Weight.Bones(model), theirs = under == null ? 0 : Weight.Bones(File.ReadAllBytes(under));
@@ -264,11 +270,11 @@ namespace ExMoreStuff
             if (page != null) package.Add(new KeyValuePair<string, byte[]>(to + ".png", page));
             string temp = zipPath + ".tmp";
             Directory.CreateDirectory(Path.GetDirectoryName(zipPath));
+            if (File.Exists(temp)) File.Delete(temp);   // left by a write a crash stopped
             using (ZipArchive zip = ZipFile.Open(temp, ZipArchiveMode.Create))
                 foreach (var file in package)
                     using (Stream s = zip.CreateEntry(file.Key, CompressionLevel.Optimal).Open()) s.Write(file.Value, 0, file.Value.Length);
-            if (File.Exists(zipPath)) File.Delete(zipPath);
-            File.Move(temp, zipPath);
+            SafeFile.Swap(temp, zipPath);   // the old zip until the new one is complete
         }
     }
 }

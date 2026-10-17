@@ -7,9 +7,10 @@ using System.Windows.Forms;
 namespace ExMoreStuff
 {
     // Advanced > Uploading Guide (user 2026-10-12: "a very basic and in some parts self explanatory guide"): a mod already
-    // made, made ready to share in three steps (dock it, get it ready, on Browse Mods for everyone), each with buttons to
-    // the tools it needs (Go: "addfile", "freecodes", "creation", "browse"). No upload step (user 2026-10-13: "get rid of
-    // the upload to game banana option").
+    // made, made ready to share and put on GameBanana in four steps (dock it, get it ready, upload it, on Browse Mods for
+    // everyone), each with buttons to the tools it needs (Go: "addfile", "freecodes", "creation", "browse"; an https
+    // address opens in the browser). The upload step is GameBanana's own form, field by field (user 2026-10-17; the
+    // wording approved by the user).
     class GuidePanel : Clear
     {
         public event Action<string> Go;
@@ -37,7 +38,8 @@ namespace ExMoreStuff
             var controls = new List<Control>
             {
                 new Heading("Uploading Guide", width),
-                ShadowLabel.Note("Made a costume or stage? These steps get it ready to share. The buttons open each tool.", width),
+                ShadowLabel.Note("Made a costume, stage or song? These steps get it ready and onto GameBanana, where EX More Stuff shows it to everyone. " +
+                                 "The buttons open each tool.", width),
                 new Heading("1   Dock it", width),
                 ShadowLabel.Note("Add Mod From File, pick your mod's zip and press Dock for edits. It stays out of your game, and its card waits at the top of " +
                                  "Advanced.\n\nThe zip needs to be a package made for EX More Stuff: its files in the zip's root, named for its slot or stage code " +
@@ -45,15 +47,29 @@ namespace ExMoreStuff
                 Buttons(width, Tuple.Create("Add Mod From File", "addfile")),
                 new Heading("2   Get it ready", width),
                 ShadowLabel.Note("Its code: find one nobody uses on Free codes (costume slots " + Catalog.FirstCustomCostume + "-" + Catalog.LastShared + " are for sharing), " +
-                                 "type it on the docked card and press Change.\n\nColor pictures (a costume): press Color pictures on the docked card. The game " +
+                                 "type it on the docked card and press Change.\n\nCostume colors: press Color pictures on the docked card. The game " +
                                  "opens once per color and the pictures go into the zip, for rollback games' character select. Right-click a color there for a " +   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
-                                 "full-size picture for your mod's page.\n\nMusic (a stage): coming soon on the Music tab. A stage's own music can already " +
-                                 "go in its zip as BGM_<its code>.csb.", width),
+                                 "full-size picture for your mod's page. Make sure all 10 colors are there and each looks different at a glance. Right-click " +
+                                 "a color that only repeats another > Force debug color.\n\nSongs: make them on Advanced > Music and press Export for " +
+                                 "GameBanana. It asks for a picture, which goes inside the zip for the song's card, and saves the zip with a 5-second preview " +
+                                 "MP3 beside it.", width),
                 Buttons(width, Tuple.Create("Free codes", "freecodes"), Tuple.Create("Costume creation", "creation")),
-                new Heading("3   On Browse Mods", width),
-                ShadowLabel.Note("A mod on GameBanana is on Browse Mods for everyone once GameBanana has checked its file (press Refresh to see it). Players " +
-                                 "install it in one click, in the code you chose, which is yours from then on (Free codes shows it taken). Remove the docked " +
-                                 "card when you're done.", width),
+                new Heading("3   Upload it to GameBanana", width),
+                ShadowLabel.Note("You need a GameBanana account. Open Ultra Street Fighter IV's section on GameBanana and press Subscribe.\n\n" +
+                                 "Where it goes: stages in Stages, costumes in Skins, songs in Sounds > Music.", width),
+                Buttons(width, Tuple.Create("GameBanana's USF4 section", "https://gamebanana.com/games/6971")),
+                ShadowLabel.Note("Main tab: a title, the game Ultra Street Fighter IV, and the category above. If your mod is 18+, fill in its Content " +
+                                 "Ratings here (sexual content or themes, nudity, fetishistic, intense violence, blood and gore), so players who hide NSFW " +
+                                 "mods don't see it.\n\nOwnership tab: answer \"Is this a port?\" and \"Did you create this mod?\", and put at least your " +
+                                 "username in the first Author field.\n\nMedia tab: at least 2 screenshots. The first one is the picture players see on your " +
+                                 "mod's card in EX More Stuff. Songs are different: add the 5-second MP3 as the preview (the picture is already in the zip).\n\n" +
+                                 "Files: your zip.\n- A costume: its files in the zip's root, named for its slot (CMY_79.obj.emo, .nml.emb, .shd.emo, .bsr, " +
+                                 "CMY_79_01.col.emb to CMY_79_10.obj.emm, and a picture per color).\n- A stage: STG_<code>.emz and STG_<code>.tex.emz, plus " +
+                                 "BGM_<code>.csb for its own music.\n- A song: the zip Export for GameBanana made.\n\nPress Submit. Once GameBanana has " +
+                                 "checked the file, it shows on Browse Mods for everyone within 2-3 minutes (press Refresh).", width),
+                new Heading("4   On Browse Mods", width),
+                ShadowLabel.Note("Players install it in one click, in the code you chose, which is yours from then on (Free codes shows it taken). Remove " +
+                                 "the docked card when you're done.", width),
                 Buttons(width, Tuple.Create("Browse Mods", "browse")),
                 // where the support buttons on the cards come from (user 2026-10-14: "so people know how it grabs the link")
                 new Heading("Ko-fi and Patreon", width),
@@ -77,7 +93,12 @@ namespace ExMoreStuff
             {
                 var button = new FlatButton(b.Item1) { Location = new Point(x, 2) };
                 string where = b.Item2;
-                button.Click += (s, e) => { var go = Go; if (go != null) go(where); };
+                button.Click += (s, e) =>
+                {
+                    if (where.StartsWith("https://", StringComparison.Ordinal)) { try { System.Diagnostics.Process.Start(where); } catch (Exception) { } return; }
+                    var go = Go;
+                    if (go != null) go(where);
+                };
                 row.Controls.Add(button);
                 x = button.Right + 8;
             }

@@ -330,6 +330,67 @@ namespace ExMoreStuff
 
         static void Check(int hr, string what) { if (hr < 0) throw new InvalidDataException("Media Foundation couldn't " + what + " (0x" + hr.ToString("X8") + ")"); }
 
+        /// <summary>16-bit stereo PCM at 44.1 kHz as an MP3 at 320 kbps, through Windows' own MP3 encoder (Windows 8 and
+        /// later; Advanced > Music's Export loop, user 2026-10-16).</summary>
+        public static void EncodeMp3(string path, short[] pcm)
+        {
+            Check(MFStartup(0x20070, 0), "start Media Foundation");
+            IMFSinkWriter writer = null;
+            try
+            {
+                if (File.Exists(path)) File.Delete(path);
+                Check(MFCreateSinkWriterFromURL(Path.GetFullPath(path), IntPtr.Zero, IntPtr.Zero, out writer), "make an MP3 file");
+                IMFMediaType output, input;
+                Check(MFCreateMediaType(out output), "make a media type");
+                Check(output.SetGUID(MT_MAJOR_TYPE, MediaTypeAudio), "set audio");
+                Check(output.SetGUID(MT_SUBTYPE, AudioFormatMP3), "set MP3");
+                Check(output.SetUINT32(MT_AUDIO_NUM_CHANNELS, 2), "set stereo");
+                Check(output.SetUINT32(MT_AUDIO_SAMPLES_PER_SECOND, (uint)Song.Rate), "set the sample rate");
+                Check(output.SetUINT32(MT_AUDIO_AVG_BYTES_PER_SECOND, 320000 / 8), "set 320 kbps");
+                uint stream;
+                Check(writer.AddStream(output, out stream), "add the MP3 stream (Windows' MP3 encoder)");
+                Check(MFCreateMediaType(out input), "make a media type");
+                Check(input.SetGUID(MT_MAJOR_TYPE, MediaTypeAudio), "set audio");
+                Check(input.SetGUID(MT_SUBTYPE, AudioFormatPCM), "set PCM");
+                Check(input.SetUINT32(MT_AUDIO_NUM_CHANNELS, 2), "set stereo");
+                Check(input.SetUINT32(MT_AUDIO_SAMPLES_PER_SECOND, (uint)Song.Rate), "set the sample rate");
+                Check(input.SetUINT32(MT_AUDIO_BITS_PER_SAMPLE, 16), "set 16-bit");
+                Check(input.SetUINT32(MT_AUDIO_BLOCK_ALIGNMENT, 4), "set the block size");
+                Check(input.SetUINT32(MT_AUDIO_AVG_BYTES_PER_SECOND, (uint)Song.Rate * 4), "set the byte rate");
+                Check(writer.SetInputMediaType(stream, input, IntPtr.Zero), "feed it PCM");
+                Marshal.ReleaseComObject(output);
+                Marshal.ReleaseComObject(input);
+                Check(writer.BeginWriting(), "begin writing");
+                const int chunk = 4410;   // 100 ms
+                for (int frame = 0; frame < pcm.Length / 2; frame += chunk)
+                {
+                    int frames = Math.Min(chunk, pcm.Length / 2 - frame), bytes = frames * 4;
+                    IMFMediaBuffer buffer;
+                    Check(MFCreateMemoryBuffer((uint)bytes, out buffer), "make a buffer");
+                    IntPtr p;
+                    uint max, len;
+                    Check(buffer.Lock(out p, out max, out len), "lock a buffer");
+                    Marshal.Copy(pcm, frame * 2, p, frames * 2);
+                    buffer.Unlock();
+                    Check(buffer.SetCurrentLength((uint)bytes), "fill a buffer");
+                    IMFSample sample;
+                    Check(MFCreateSample(out sample), "make a sample");
+                    Check(sample.AddBuffer(buffer), "add a buffer");
+                    Check(sample.SetSampleTime(frame * 10000000L / Song.Rate), "time a sample");
+                    Check(sample.SetSampleDuration(frames * 10000000L / Song.Rate), "time a sample");
+                    Check(writer.WriteSample(stream, sample), "encode");
+                    Marshal.ReleaseComObject(sample);
+                    Marshal.ReleaseComObject(buffer);
+                }
+                Check(writer.Finish(), "finish the MP3");
+            }
+            finally
+            {
+                if (writer != null) Marshal.ReleaseComObject(writer);
+                MFShutdown();
+            }
+        }
+
         const uint FirstAudio = 0xFFFFFFFD, AllStreams = 0xFFFFFFFE, ReaderError = 0x1, EndOfStream = 0x2, TypeChanged = 0x20;
         static readonly Guid MT_MAJOR_TYPE = new Guid("48eba18e-f8c9-4687-bf11-0a74c9f96a8f");
         static readonly Guid MT_SUBTYPE = new Guid("f7e34c9a-42e8-4714-b74b-cb29d72c35e5");
@@ -338,12 +399,32 @@ namespace ExMoreStuff
         static readonly Guid MT_AUDIO_BITS_PER_SAMPLE = new Guid("f2deb57f-40fa-4764-aa33-ed4f2d1ff669");
         static readonly Guid MediaTypeAudio = new Guid("73647561-0000-0010-8000-00AA00389B71");
         static readonly Guid AudioFormatPCM = new Guid("00000001-0000-0010-8000-00AA00389B71");
+        static readonly Guid AudioFormatMP3 = new Guid("00000055-0000-0010-8000-00AA00389B71");
+        static readonly Guid MT_AUDIO_AVG_BYTES_PER_SECOND = new Guid("1aab75c8-cfef-451c-ab95-ac034b8e1731");
+        static readonly Guid MT_AUDIO_BLOCK_ALIGNMENT = new Guid("322de230-9eeb-43bd-ab7a-ff412251541d");
 
         [DllImport("mfplat.dll")] static extern int MFStartup(int version, int flags);
         [DllImport("mfplat.dll")] static extern int MFShutdown();
         [DllImport("mfplat.dll")] static extern int MFCreateMediaType(out IMFMediaType type);
         [DllImport("mfreadwrite.dll", CharSet = CharSet.Unicode)]
         static extern int MFCreateSourceReaderFromURL(string url, IntPtr attributes, out IMFSourceReader reader);
+        [DllImport("mfreadwrite.dll", CharSet = CharSet.Unicode)]
+        static extern int MFCreateSinkWriterFromURL(string url, IntPtr byteStream, IntPtr attributes, out IMFSinkWriter writer);
+        [DllImport("mfplat.dll")] static extern int MFCreateSample(out IMFSample sample);
+        [DllImport("mfplat.dll")] static extern int MFCreateMemoryBuffer(uint length, out IMFMediaBuffer buffer);
+
+        // IMFSinkWriter, in vtable order (its Finalize is named Finish here: Finalize is C#'s destructor name)
+        [ComImport, Guid("3137f1cd-fe5e-4805-a5d8-fb477448cb3d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMFSinkWriter
+        {
+            [PreserveSig] int AddStream(IMFMediaType target, out uint stream);
+            [PreserveSig] int SetInputMediaType(uint stream, IMFMediaType input, IntPtr encodingParameters);
+            [PreserveSig] int BeginWriting();
+            [PreserveSig] int WriteSample(uint stream, IMFSample sample);
+            void SendStreamTick(); void PlaceMarker(); void NotifyEndOfSegment(); void Flush();
+            [PreserveSig] int Finish();
+            void GetServiceForStream(); void GetStatistics();
+        }
 
         // The interfaces below list every method in vtable order; only the ones called have real signatures.
         [ComImport, Guid("44ae0fa8-ea31-4109-8d2e-4cae4997c555"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -384,10 +465,14 @@ namespace ExMoreStuff
             void DeleteAllItems(); void SetUINT32(); void SetUINT64(); void SetDouble(); void SetGUID(); void SetString();
             void SetBlob(); void SetUnknown(); void LockStore(); void UnlockStore(); void GetCount(); void GetItemByIndex();
             void CopyAllItems();
-            void GetSampleFlags(); void SetSampleFlags(); void GetSampleTime(); void SetSampleTime(); void GetSampleDuration();
-            void SetSampleDuration(); void GetBufferCount(); void GetBufferByIndex();
+            void GetSampleFlags(); void SetSampleFlags(); void GetSampleTime();
+            [PreserveSig] int SetSampleTime(long time);
+            void GetSampleDuration();
+            [PreserveSig] int SetSampleDuration(long duration);
+            void GetBufferCount(); void GetBufferByIndex();
             [PreserveSig] int ConvertToContiguousBuffer(out IMFMediaBuffer buffer);
-            void AddBuffer(); void RemoveBufferByIndex(); void RemoveAllBuffers(); void GetTotalLength(); void CopyToBuffer();
+            [PreserveSig] int AddBuffer(IMFMediaBuffer buffer);
+            void RemoveBufferByIndex(); void RemoveAllBuffers(); void GetTotalLength(); void CopyToBuffer();
         }
 
         [ComImport, Guid("045fa593-8799-42b8-bc8d-8968c6453507"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -395,7 +480,9 @@ namespace ExMoreStuff
         {
             [PreserveSig] int Lock(out IntPtr buffer, out uint maxLength, out uint currentLength);
             [PreserveSig] int Unlock();
-            void GetCurrentLength(); void SetCurrentLength(); void GetMaxLength();
+            void GetCurrentLength();
+            [PreserveSig] int SetCurrentLength(uint length);
+            void GetMaxLength();
         }
     }
 }

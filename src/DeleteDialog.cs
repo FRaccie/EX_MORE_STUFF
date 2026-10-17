@@ -14,9 +14,9 @@ namespace ExMoreStuff
         public Choice Picked { get; private set; }
 
         // `title` names it, `what` says what happens
-        public DeleteDialog(string title, string what)
+        public DeleteDialog(string title, string what, string verb = "Delete")   // verb: "Uninstall" from Browse Mods
         {
-            Text = "Delete";
+            Text = verb;
             Font = Theme.Font(9f);
             BackColor = Theme.Base;
             ForeColor = Theme.Text;
@@ -29,11 +29,11 @@ namespace ExMoreStuff
             int height = TextRenderer.MeasureText(text, Theme.Font(9.5f), new Size(width - 44, 0), TextFormatFlags.WordBreak).Height + 8;
             ClientSize = new Size(width, 60 + height + 66);
 
-            var heading = new Label { Text = "Delete " + title + "?", AutoSize = false, AutoEllipsis = true, BackColor = Color.Transparent, Font = Theme.Bold(13f), ForeColor = Theme.Text,
+            var heading = new Label { Text = verb + " " + title + "?", AutoSize = false, AutoEllipsis = true, BackColor = Color.Transparent, Font = Theme.Bold(13f), ForeColor = Theme.Text,
                                       Bounds = new Rectangle(22, 18, width - 44, 30) };
             var about = new Label { Text = text, AutoSize = false, BackColor = Color.Transparent, Font = Theme.Font(9.5f), ForeColor = Theme.Muted, Bounds = new Rectangle(22, 54, width - 44, height) };
             var cancel = new FlatButton("Cancel");
-            var delete = new FlatButton("Delete", true);
+            var delete = new FlatButton(verb, true);
             int top = ClientSize.Height - 54;
             delete.Location = new Point(width - 22 - delete.Width, top);
             cancel.Location = new Point(delete.Left - 10 - cancel.Width, top);

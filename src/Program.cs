@@ -76,7 +76,7 @@ namespace ExMoreStuff
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile));
-                File.WriteAllText(SettingsFile, new JavaScriptSerializer().Serialize(j));
+                SafeFile.WriteAllText(SettingsFile, new JavaScriptSerializer().Serialize(j), true);
             }
             catch (Exception) { }
         }
@@ -132,6 +132,13 @@ namespace ExMoreStuff
         {
             get { object v; return Read().TryGetValue("costumeWarningBy", out v) && v != null ? Convert.ToString(v) : null; }
             set { Write("costumeWarningBy", value); }
+        }
+
+        /// <summary>Mods rated 18+ on GameBanana left off Browse Mods (the About tab's switch, off to begin with; user 2026-10-17).</summary>
+        public static bool HideNsfw
+        {
+            get { object v; return Read().TryGetValue("hideNsfw", out v) && v is bool && (bool)v; }
+            set { Write("hideNsfw", value); }
         }
 
         /// <summary>Street Fighter X Tekken's folder, once chosen for its music (Music page), or null.</summary>

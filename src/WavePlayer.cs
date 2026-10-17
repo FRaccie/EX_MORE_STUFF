@@ -49,10 +49,12 @@ namespace ExMoreStuff
         {
             Stop();
             pcm = song;
-            looping = loop;
             loopStart = loopStartFrame;
             loopEnd = Math.Min(loopEndFrame, song.Length / 2);
             startFrame = Math.Max(0, Math.Min(from, song.Length / 2 - 1));
+            // from past the loop's end: on to the song's end, not back into the loop (user 2026-10-16: "when i try to play
+            // past the loop ... it wont let me"; the game never plays there, but the player wants to hear it)
+            looping = loop && startFrame < loopEnd;
             var fmt = new WAVEFORMATEX { wFormatTag = 1, nChannels = 2, nSamplesPerSec = Song.Rate, wBitsPerSample = 16, nBlockAlign = 4, nAvgBytesPerSec = Song.Rate * 4 };
             int r = waveOutOpen(out device, -1, ref fmt, IntPtr.Zero, IntPtr.Zero, 0);
             if (r != 0) { device = IntPtr.Zero; throw new InvalidOperationException("Windows couldn't open the sound output (" + r + ")"); }

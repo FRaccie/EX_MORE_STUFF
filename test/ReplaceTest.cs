@@ -79,6 +79,29 @@ namespace ExMoreStuff
             Check(Replacements.Load(game).Any(r => r.Stage == "TRN" && r.Source == "docked"), "listed as docked");
             Check(Replacements.Restore(game, "TRN") == null && !File.Exists(trn), "and taken back out");
 
+            Console.WriteLine("With its own music (user 2026-10-15: the preview played Training Stage's)");
+            string bgm = Path.Combine(Game.PatchFolder(game), "battle", "sound", "bgm", "BGM_TRN.csb");
+            Directory.CreateDirectory(Path.GetDirectoryName(bgm));
+            File.WriteAllText(bgm, "a song from the Music page");
+            Replacements.ReplaceWith(game, "TRN", "docked", "DET", docked, Encoding.ASCII.GetBytes("its own music"));
+            Check(File.ReadAllText(bgm) == "its own music", "its music in Training Stage's music's place");
+            Check(Replacements.Restore(game, "TRN") == null && File.ReadAllText(bgm) == "a song from the Music page", "taken out, what was there back");
+            File.Delete(bgm);
+
+            Console.WriteLine("A custom stage in a game stage's place with its own music (a performance test)");
+            foreach (string suffix in StagePack.Suffixes)
+                File.WriteAllBytes(Path.Combine(patch, "STG_U07" + suffix), StagePack.Recode(File.ReadAllBytes(Path.Combine(resource, "STG_DET" + suffix)), "DET", "U07"));
+            string own = Path.Combine(Path.GetDirectoryName(bgm), "BGM_U07.csb"), det = Path.Combine(Path.GetDirectoryName(bgm), "BGM_DET.csb");
+            File.WriteAllText(own, "U07's own music");
+            Replacements.Replace(game, "DET", "U07");
+            Check(!File.Exists(det), "the Stages page's replace: the stage's own music stays");
+            Replacements.Restore(game, "DET");
+            Replacements.Replace(game, "DET", "U07", true);
+            Check(File.ReadAllText(det) == "U07's own music", "with its music: BGM_U07.csb plays as BGM_DET.csb");
+            Check(Replacements.Restore(game, "DET") == null && !File.Exists(det) && File.Exists(own), "taken out after; its own stays");
+            File.Delete(own);
+            foreach (string suffix in StagePack.Suffixes) File.Delete(Path.Combine(patch, "STG_U07" + suffix));
+
             Console.WriteLine("Beautiful Bay");
             Directory.Delete(game, true);
             Directory.CreateDirectory(Path.Combine(game, "resource", "battle", "stage"));

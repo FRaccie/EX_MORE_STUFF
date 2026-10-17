@@ -119,6 +119,7 @@ namespace ExMoreStuff
         {
             if (bytes <= 0) return "-";
             if (bytes < 100 * 1024) return (bytes / 1024.0).ToString("0") + " KB";
+            if (bytes >= 1024L * 1048576) return (bytes / 1073741824.0).ToString("0.0") + " GB";
             return (bytes / 1048576.0).ToString(bytes < 10 * 1048576 ? "0.0" : "0") + " MB";
         }
 

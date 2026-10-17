@@ -159,11 +159,11 @@ namespace ExMoreStuff
         {
             string temp = zipPath + ".tmp";
             Directory.CreateDirectory(Path.GetDirectoryName(zipPath));
+            if (File.Exists(temp)) File.Delete(temp);   // left by a write a crash stopped
             using (ZipArchive zip = ZipFile.Open(temp, ZipArchiveMode.Create))
                 foreach (var file in package)
                     using (Stream s = zip.CreateEntry(file.Key, CompressionLevel.Optimal).Open()) s.Write(file.Value, 0, file.Value.Length);
-            if (File.Exists(zipPath)) File.Delete(zipPath);
-            File.Move(temp, zipPath);
+            SafeFile.Swap(temp, zipPath);   // the old zip until the new one is complete
         }
 
         public static string Md5(string path)

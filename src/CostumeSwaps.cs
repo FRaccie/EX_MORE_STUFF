@@ -66,7 +66,7 @@ namespace ExMoreStuff
             {
                 { "fighter", s.Fighter }, { "costume", s.Costume }, { "source", s.Source }, { "files", s.Files }, { "backups", s.Backups },
             }).ToList();
-            File.WriteAllText(ListPath(game), new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "format", 1 }, { "swaps", entries } }));
+            SafeFile.WriteAllText(ListPath(game), new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "format", 1 }, { "swaps", entries } }), true);
         }
 
         /// <summary>A costume's files by what follows its prefix (".obj.emo", "_01.col.emb" ...): a game costume's (1-7)
@@ -178,7 +178,7 @@ namespace ExMoreStuff
                         File.Move(path, backup);
                         record.Backups.Add(relative);
                     }
-                    File.WriteAllBytes(path, data);
+                    SafeFile.WriteAllBytes(path, data);
                     record.Files[relative] = Installer.Sha256(path);
                 }
             }

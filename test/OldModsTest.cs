@@ -121,6 +121,42 @@ namespace ExMoreStuff
             Check(again == Path.Combine(day, "patch_ae2_tu3", "battle", "stage", "STG_ZZZ (2).emz") && File.ReadAllText(kept) == "first" && File.ReadAllText(again) == "second",
                   "a second one with that name doesn't replace the first: " + again);
 
+            // their originals as the import would have kept them (this test's imports deleted them): found by what they are
+            Console.WriteLine("Put back, one at a time (user 2026-10-15)");
+            Action<string, string, string> backedUp = (folder, name, from) =>
+            {
+                string to = Path.Combine(day, "patch_ae2_tu3", folder, name);
+                Directory.CreateDirectory(Path.GetDirectoryName(to));
+                File.Copy(from, to);
+            };
+            foreach (string f in new[] { "STG_TRN.emz", "STG_TRN.tex.emz" }) backedUp(Path.Combine("battle", "stage"), f, Path.Combine(realStage, f));
+            foreach (string f in Directory.GetFiles(realRyu, "RYU_01*")) backedUp(Path.Combine("battle", "chara", "RYU"), "RYU_40" + Path.GetFileName(f).Substring(6), f);
+            foreach (string f in Directory.GetFiles(realRyu, "RYU_01*")) backedUp(Path.Combine("battle", "chara", "RYU"), "RYU_03" + Path.GetFileName(f).Substring(6), f);
+            Func<int, Installed> costume = slot => Installer.Load(game).SingleOrDefault(r => r.Item.IsCostume && r.Item.Slot == slot);
+            u01 = Installer.Load(game).Single(r => r.Item.IsStage && r.Item.Code == "U01");
+            Check(ModScan.Imported(u01) && ModScan.Originals(u01).Count == 2 && ModScan.Originals(costume(83)).Count == Directory.GetFiles(realRyu, "RYU_01*").Length,
+                  "each import's originals found: the Training Stage's 2, Ryu 40's");
+            Check(ModScan.Originals(u01).All(o => !o.Key.Contains("(2)")), "a second file of the same name that day isn't taken");
+
+            string zip01 = u01.Package;
+            ModScan.PutBack(game, u01);
+            Check(!Installer.Load(game).Any(r => r.Item.Code == "U01") && !File.Exists(Path.Combine(stage, "STG_U01.emz")) && !File.Exists(zip01), "stage U01 deleted, its zip gone");
+            Check(!Replacements.Load(game).Any(r => r.Stage == "TRN") && Same(Path.Combine(stage, "STG_TRN.emz"), Path.Combine(realStage, "STG_TRN.emz")) &&
+                  Same(Path.Combine(stage, "STG_TRN.tex.emz"), Path.Combine(realStage, "STG_TRN.tex.emz")), "the replaced Training Stage's own files back where they were (EX More Stuff's replacement off first)");
+            Check(!File.Exists(Path.Combine(day, "patch_ae2_tu3", "battle", "stage", "STG_TRN.emz")) && File.Exists(Path.Combine(day, "patch_ae2_tu3", "battle", "stage", "STG_ZZZ.emz")),
+                  "out of the backup; another mod's backup stays");
+
+            ModScan.PutBack(game, costume(83));
+            Check(costume(83) == null && !File.Exists(Path.Combine(chara, "RYU_83.obj.emo")) && Same(Path.Combine(chara, "RYU_40.obj.emo"), Path.Combine(realRyu, "RYU_01.obj.emo")),
+                  "Ryu 83 deleted, RYU_40 back as it was");
+            Check(costume(84) != null && costume(82) != null, "the other imports stay");
+
+            File.WriteAllText(Path.Combine(chara, "RYU_03.obj.emo"), "another mod put in since");
+            try { ModScan.PutBack(game, costume(82)); Check(false, "another file in its place: refused"); }
+            catch (IOException ex) { Check(ex.Message.Contains("RYU_03.obj.emo") && costume(82) != null && ModScan.Originals(costume(82)).Count > 0, "another file in its place: refused, nothing changed: " + ex.Message); }
+            try { ModScan.PutBack(game, costume(84)); Check(false, "no originals: refused"); }
+            catch (IOException ex) { Check(costume(84) != null, "no originals in the backup: refused, nothing changed: " + ex.Message); }
+
             Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");
             Environment.Exit(failures == 0 ? 0 : 1);
         }

@@ -14,6 +14,8 @@ if not exist out mkdir out
 echo -resource:res\background.jpg,background.jpg>> out\resources.rsp
 echo -resource:res\logo.png,logo.png>> out\resources.rsp
 echo -resource:res\wordmark.png,wordmark.png>> out\resources.rsp
+rem the GameBanana section icons on Browse Mods cards (skins, stages, music; user 2026-10-16)
+(for %%f in (res\icons\*.png) do @echo -resource:res\icons\%%~nxf,icons.%%~nxf) >> out\resources.rsp
 rem Tom's Round BGM mod (dinput8.dll), put next to SSFIV.exe with round 2/3 music (src\RoundMod.cs)
 echo -resource:res\roundbgm\dinput8.dll,roundbgm.dll>> out\resources.rsp
 rem the performance test's helper (a dinput8.dll too), next to SSFIV.exe only while a test runs (src\PerfTest.cs; helper\build_helper.bat)

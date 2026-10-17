@@ -51,7 +51,7 @@ namespace ExMoreStuff
             {
                 { "stage", r.Stage }, { "source", r.Source }, { "files", r.Files }, { "backups", r.Backups },
             }).ToList();
-            File.WriteAllText(ListPath(game), new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "format", 1 }, { "replaced", entries } }));
+            SafeFile.WriteAllText(ListPath(game), new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "format", 1 }, { "replaced", entries } }), true);
         }
 
         // The file a stage is copied from: a game stage's own, as the game shipped it (resource\battle\stage, never a
@@ -79,7 +79,7 @@ namespace ExMoreStuff
             return null;
         }
 
-        public static void Replace(string game, string stage, string source)
+        public static void Replace(string game, string stage, string source, bool withMusic = false)
         {
             if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
             var list = Load(game);
@@ -100,12 +100,16 @@ namespace ExMoreStuff
                 if (from == null) throw new FileNotFoundException("STG_" + source + suffix + " wasn't found");
                 made[StagePack.RelativePath(stage, suffix)] = StagePack.Recode(File.ReadAllBytes(from), source, stage);
             }
+            // `withMusic` (a performance test; user 2026-10-15): a custom stage's own music in the game (BGM_<code>.csb from
+            // its package or the Music page) plays in its place too; the Stages page's replacements keep the stage's music
+            string music = withMusic && over == null && Stages.IsCustomCode(source) ? MusicBank.PatchFile(game, "BGM_" + source + ".csb") : null;
+            if (music != null && File.Exists(music)) made[Path.Combine("battle", "sound", "bgm", "BGM_" + stage + ".csb")] = File.ReadAllBytes(music);
             Write(game, list, stage, source, made);
         }
 
         /// <summary>`stage` plays as files given here (a docked stage's, from its zip: not installed), `code` being the
         /// code they're made for; `source` names them in the list (the stage preview's "docked"). Restore puts it back.</summary>
-        public static void ReplaceWith(string game, string stage, string source, string code, IDictionary<string, byte[]> files)
+        public static void ReplaceWith(string game, string stage, string source, string code, IDictionary<string, byte[]> files, byte[] music = null)
         {
             if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
             var list = Load(game);
@@ -117,6 +121,9 @@ namespace ExMoreStuff
                 if (!files.TryGetValue(suffix, out data)) throw new FileNotFoundException("STG_" + code + suffix + " wasn't found");
                 made[StagePack.RelativePath(stage, suffix)] = code == stage ? data : StagePack.Recode(data, code, stage);
             }
+            // `music`: its own (BGM_<code>.csb) in the stage's music's place, so it plays with it (the stage preview; user
+            // 2026-10-15: "when you test a stage it plays the wrong music"); the game plays a stage bank's cues by number
+            if (music != null) made[Path.Combine("battle", "sound", "bgm", "BGM_" + stage + ".csb")] = music;
             Write(game, list, stage, source, made);
         }
 
@@ -137,7 +144,7 @@ namespace ExMoreStuff
                         record.Backups.Add(file.Key);
                     }
                     Directory.CreateDirectory(Path.GetDirectoryName(path));
-                    File.WriteAllBytes(path, file.Value);
+                    SafeFile.WriteAllBytes(path, file.Value);
                     record.Files[file.Key] = Installer.Sha256(path);
                 }
             }

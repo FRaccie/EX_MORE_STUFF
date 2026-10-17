@@ -35,6 +35,9 @@ namespace ExMoreStuff
         public class Result
         {
             public double Average, Lowest, Baseline;
+            // from the game's speed only (a player 2026-10-15: "the benchmark's own numbers weren't caught": their SSFIV.exe
+            // differs where the helper catches the benchmark): 60 / speed, the speed never under 1, so 60 means 60 or more
+            public bool Estimated;
             public string Against;   // what the comparison ran on: "Blast Furnace", "Ryu's Original costume"
             public bool FullSpeed { get { return Average >= FullSpeedFps; } }
             /// <summary>How much slower than the game's own, in percent (0 or less: as fast or faster).</summary>
@@ -98,8 +101,8 @@ namespace ExMoreStuff
                 Result r;
                 try { r = Benchmark(game, PcFight, DevMode.Shot("PC check - Blast Furnace, Hugo vs Poison")); }
                 catch (LoadFailed ex) { throw new InvalidOperationException("the game's own Blast Furnace didn't finish its test: " + ex.Message); }
-                SaveBaseline(key, r.Average);
-                Weight.FromPcCheck(r.Average);   // where the stages' warning line starts on this PC (user)
+                SaveBaseline(key, r.Average, r.Estimated);
+                if (!r.Estimated || !r.FullSpeed) Weight.FromPcCheck(r.Average);   // where the stages' warning line starts on this PC (user); "60 or more" says too little
                 return r;
             }
             finally { Recover(game); }
@@ -127,10 +130,11 @@ namespace ExMoreStuff
                 if (item.IsStage && !Baselines().TryGetValue(pcKey, out baseline))
                 {
                     say("Checking how this PC runs the game's own Blast Furnace first (once)...");
-                    try { baseline = Benchmark(game, fight, DevMode.Shot(against + " (comparison)")).Average; }
+                    Result pc;
+                    try { pc = Benchmark(game, fight, DevMode.Shot(against + " (comparison)")); baseline = pc.Average; }
                     catch (LoadFailed ex) { throw new InvalidOperationException("the game's own " + against + " didn't finish its test: " + ex.Message); }
-                    SaveBaseline(pcKey, baseline);
-                    Weight.FromPcCheck(baseline);   // that was the PC check
+                    SaveBaseline(pcKey, baseline, pc.Estimated);
+                    if (!pc.Estimated || !pc.FullSpeed) Weight.FromPcCheck(baseline);   // that was the PC check
                 }
                 say("Putting it in place of " + (item.IsStage ? against : Fighters.Name(fighter) + "'s Original costume") + " for the test...");
                 if (item.IsStage) Replacements.Replace(game, Heaviest, item.Code);
@@ -169,6 +173,7 @@ namespace ExMoreStuff
             pending.TheirSwap = theirSwap != null ? theirSwap.Source : 0;
             pending.Moved = File.Exists(Path.Combine(game, Helper));
             Write(game, pending);
+            NoSpeed();
             if (pending.Moved) File.Move(Path.Combine(game, Helper), Path.Combine(game, Aside));   // Tom's Round BGM mod, or another mod's
             if (pending.TheirStage != null) { string note = Replacements.Restore(game, stage); if (note != null) throw new IOException(note); }
             if (pending.TheirSwap != 0) { string note = CostumeSwaps.Restore(game, fighter, 1); if (note != null) throw new IOException(note); }
@@ -183,6 +188,28 @@ namespace ExMoreStuff
                 if (File.Exists(to)) throw new IOException("an older copy of " + Path.GetFileName(relative) + " is already in " + AsideFolder);
                 File.Move(Path.Combine(patch, relative), to);
             }
+        }
+
+        // The game starts with the speed config.ini keeps from an earlier run of its own benchmark ([SYSTEM]
+        // SystemSpeed=1.00000; Tom 2026-10-15: the game closed after 4 seconds, "the benchmark's own numbers weren't
+        // caught"), and the helper takes a speed for the benchmark's end: none for the run (-1, as a game that never ran
+        // its benchmark has). config.ini comes back after (Recover: changed since Began).
+        static void NoSpeed()
+        {
+            try
+            {
+                if (!File.Exists(ConfigPath)) return;
+                string[] lines = File.ReadAllLines(ConfigPath);
+                bool changed = false;
+                for (int i = 0; i < lines.Length; i++)
+                    if (lines[i].StartsWith("SystemSpeed=", StringComparison.OrdinalIgnoreCase) && lines[i].Trim() != "SystemSpeed=-1.00000")
+                    {
+                        lines[i] = "SystemSpeed=-1.00000";
+                        changed = true;
+                    }
+                if (changed) File.WriteAllLines(ConfigPath, lines, Encoding.ASCII);
+            }
+            catch (IOException) { }   // the helper still waits for the fight (it notes the speed only after the benchmark started)
         }
 
         const string AsideFolder = "ex_more_stuff_test_aside";
@@ -286,21 +313,32 @@ namespace ExMoreStuff
                 start.EnvironmentVariables["SteamAppId"] = "45760";   // as EMBER starts it: straight from the exe, Steam still needs to know the game
                 start.EnvironmentVariables["SteamGameId"] = "45760";
                 using (Process process = Process.Start(start))
-                    if (!process.WaitForExit((int)Longest.TotalMilliseconds))
+                {
+                    // the result written and the game still open 10 seconds on (a run 2026-10-15 hung closing): closed, the
+                    // result stands
+                    var clock = Stopwatch.StartNew();
+                    TimeSpan? written = null;
+                    while (!process.WaitForExit(500))
                     {
+                        if (written == null && File.Exists(result)) written = clock.Elapsed;
+                        bool stuck = written != null && clock.Elapsed - written.Value > TimeSpan.FromSeconds(10);
+                        if (!stuck && clock.Elapsed < Longest) continue;
                         try { process.Kill(); process.WaitForExit(10000); } catch (Exception) { }
+                        if (stuck) break;
                         throw new LoadFailed("the game didn't finish the test in " + Longest.TotalMinutes + " minutes");
                     }
+                }
             }
             finally
             {
                 foreach (string file in new[] { Helper, Request })
                     try { if (IsOurs(game, file)) File.Delete(Path.Combine(game, file)); } catch (Exception) { }
             }
-            if (!File.Exists(result)) throw new LoadFailed("the game closed before the test was done");
+            if (!File.Exists(result)) throw new LoadFailed(ClosedEarly);
             var values = File.ReadAllLines(result).Select(l => l.Split(new[] { '=' }, 2)).Where(p => p.Length == 2).ToDictionary(p => p[0], p => p[1]);
             string error;
-            if (values.TryGetValue("error", out error)) throw new LoadFailed(error);
+            // (the benchmark's own numbers not caught, the game's speed there: Benchmark reads that instead)
+            if (values.TryGetValue("error", out error) && !values.ContainsKey("speed")) throw new LoadFailed(error);
             return values;
         }
 
@@ -310,9 +348,14 @@ namespace ExMoreStuff
         static Result Benchmark(string game, int[] fight, string shot)
         {
             var values = RunGame(game, FightLines(fight) + (shot != null ? "shot=" + shot + "\r\n" : ""));   // developer mode: a frame of the fight
-            double average, lowest;
+            double average, lowest, speed;
             if (!values.ContainsKey("average") || !double.TryParse(values["average"], NumberStyles.Float, CultureInfo.InvariantCulture, out average))
-                throw new LoadFailed("the test gave no average");
+            {
+                // the benchmark's own numbers not caught, but it finished: the speed the game set from its average
+                if (values.ContainsKey("speed") && double.TryParse(values["speed"], NumberStyles.Float, CultureInfo.InvariantCulture, out speed) && speed >= 1)
+                    return new Result { Average = 60 / speed, Estimated = true };
+                throw new LoadFailed(values.ContainsKey("error") ? values["error"] : "the test gave no average");
+            }
             double.TryParse(values.ContainsKey("lowest") ? values["lowest"] : "0", NumberStyles.Float, CultureInfo.InvariantCulture, out lowest);
             return new Result { Average = average, Lowest = lowest };
         }
@@ -422,11 +465,11 @@ namespace ExMoreStuff
                 using (var data = new MemoryStream()) { small.Save(data, ImageFormat.Png); png = data.ToArray(); }
             }
             string name = item.Prefix + ".png";   // STG_<code>.png: the first name a package's picture is looked for under
-            using (var zip = System.IO.Compression.ZipFile.Open(zipPath, System.IO.Compression.ZipArchiveMode.Update))
+            SafeFile.EditZip(zipPath, zip =>   // on a copy, swapped in when done
             {
                 foreach (var old in zip.Entries.Where(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)).ToList()) old.Delete();
                 using (Stream s = zip.CreateEntry(name).Open()) s.Write(png, 0, png.Length);
-            }
+            });
             File.WriteAllText(Path.Combine(PreviewFolder(zipPath), "picture.txt"), Path.GetFileName(shot));
         }
 
@@ -437,21 +480,30 @@ namespace ExMoreStuff
             string blocked = Blocked();
             if (blocked != null) throw new InvalidOperationException(blocked);
             var files = new Dictionary<string, byte[]>();
+            byte[] music = null;   // its own music (BGM_<code>.csb), played in Training Stage's place too; none: Training Stage's
             using (var zip = System.IO.Compression.ZipFile.OpenRead(zipPath))
+            {
+                Func<string, byte[]> read = name =>
+                {
+                    var entry = zip.Entries.FirstOrDefault(e => e.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (entry == null) return null;
+                    using (Stream s = entry.Open())
+                    using (var data = new MemoryStream()) { s.CopyTo(data); return data.ToArray(); }
+                };
                 foreach (string suffix in StagePack.Suffixes)
                 {
-                    var entry = zip.Entries.FirstOrDefault(e => e.Name.Equals("STG_" + item.Code + suffix, StringComparison.OrdinalIgnoreCase));
-                    if (entry == null) throw new InvalidDataException("STG_" + item.Code + suffix + " isn't in its zip");
-                    using (Stream s = entry.Open())
-                    using (var data = new MemoryStream()) { s.CopyTo(data); files[suffix] = data.ToArray(); }
+                    files[suffix] = read("STG_" + item.Code + suffix);
+                    if (files[suffix] == null) throw new InvalidDataException("STG_" + item.Code + suffix + " isn't in its zip");
                 }
+                music = read("BGM_" + item.Code + ".csb");
+            }
             string folder = PreviewFolder(zipPath), shot = Path.Combine(folder, "preview.png");
             if (Directory.Exists(folder)) Directory.Delete(folder, true);
             Directory.CreateDirectory(folder);
             try
             {
                 Begin(game, "TRN", null);
-                Replacements.ReplaceWith(game, "TRN", "docked", item.Code, files);
+                Replacements.ReplaceWith(game, "TRN", "docked", item.Code, files, music);
                 RunGame(game, FightLines(new[] { 0, 1, StageId("TRN") }) + TrainingMode + "shot=" + shot + "\r\n" + PreviewShots);
             }
             finally { Recover(game); }
@@ -459,6 +511,27 @@ namespace ExMoreStuff
             if (made.Count == 0) throw new LoadFailed("the game saved no pictures");
             return made;
         }
+
+        /// <summary>Listen to stage (user 2026-10-15: the green circle's menu): an installed stage with its own music, in
+        /// Training Stage's place, in training mode (the benchmark plays no music; training mode does), for ListenSeconds,
+        /// then the game closes by itself. Off the window's thread.</summary>
+        public static void Listen(string game, Item item)
+        {
+            string blocked = Blocked();
+            if (blocked != null) throw new InvalidOperationException(blocked);
+            try
+            {
+                Begin(game, "TRN", null);
+                Replacements.Replace(game, "TRN", item.Code, true);   // its BGM_<code>.csb plays as Training Stage's
+                // the player closing the game sooner (its X, Alt+F4) leaves no result: that's fine for listening
+                try { RunGame(game, FightLines(new[] { 0, 1, StageId("TRN") }) + TrainingMode + "listen=" + ListenSeconds + "\r\n"); }
+                catch (LoadFailed ex) when (ex.Message == ClosedEarly) { }
+            }
+            finally { Recover(game); }
+        }
+
+        public const int ListenSeconds = 60;
+        const string ClosedEarly = "the game closed before the test was done";
 
         // a docked costume's files out of its zip into `folder` (emptied first), by what follows its prefix
         static Dictionary<string, string> Unpack(string zipPath, Item item, string folder)
@@ -485,13 +558,15 @@ namespace ExMoreStuff
         /// stays out of the game).</summary>
         public static void PutPictures(string game, Item item, Installed record, IDictionary<int, Bitmap> made)
         {
-            using (var zip = System.IO.Compression.ZipFile.Open(record.Package, System.IO.Compression.ZipArchiveMode.Update))
+            SafeFile.EditZip(record.Package, zip =>   // on a copy, swapped in when done
+            {
                 foreach (var picture in made)
                 {
                     string entry = item.Prefix + "_" + picture.Key.ToString("D2") + ".png";
                     foreach (var old in zip.Entries.Where(e => string.Equals(e.Name, entry, StringComparison.OrdinalIgnoreCase)).ToList()) old.Delete();
                     using (Stream s = zip.CreateEntry(entry).Open()) picture.Value.Save(s, ImageFormat.Png);
                 }
+            });
             if (record.Source != Docked.Source) Installer.InstallPackage(game, item, record.Package, "file");
         }
 
@@ -603,7 +678,7 @@ namespace ExMoreStuff
         static void Save(Dictionary<string, object> j)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ResultsFile));
-            File.WriteAllText(ResultsFile, new JavaScriptSerializer().Serialize(j));
+            SafeFile.WriteAllText(ResultsFile, new JavaScriptSerializer().Serialize(j), true);
             cache = j;
             cachedFrom = ResultsFile;
         }
@@ -621,12 +696,16 @@ namespace ExMoreStuff
             return Part(Load(), "baselines").ToDictionary(p => p.Key, p => Convert.ToDouble(p.Value));
         }
 
-        static void SaveBaseline(string key, double average)
+        static void SaveBaseline(string key, double average, bool estimated)
         {
             var j = Load();
             Part(j, "baselines")[key] = Math.Round(average, 2);
+            if (estimated) Part(j, "estimated")[key] = true; else Part(j, "estimated").Remove(key);
             Save(j);
         }
+
+        /// <summary>Whether the PC check's result is from the game's speed only (Result.Estimated): 60 there means 60 or more.</summary>
+        public static bool PcEstimated() { return Part(Load(), "estimated").ContainsKey(PcKey()); }
 
         static void SaveResult(string key, Result r)
         {
@@ -634,7 +713,7 @@ namespace ExMoreStuff
             Part(j, "results")[key] = new Dictionary<string, object>
             {
                 { "average", Math.Round(r.Average, 2) }, { "lowest", Math.Round(r.Lowest, 2) }, { "baseline", Math.Round(r.Baseline, 2) },
-                { "against", r.Against }, { "when", DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) },
+                { "against", r.Against }, { "when", DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) }, { "estimated", r.Estimated },
             };
             Save(j);
         }
@@ -648,7 +727,7 @@ namespace ExMoreStuff
             try
             {
                 return new Result { Average = Convert.ToDouble(r["average"]), Lowest = Convert.ToDouble(r["lowest"]), Baseline = Convert.ToDouble(r["baseline"]),
-                                    Against = Convert.ToString(r["against"]) };
+                                    Against = Convert.ToString(r["against"]), Estimated = r.ContainsKey("estimated") && Convert.ToBoolean(r["estimated"]) };
             }
             catch (Exception) { return null; }
         }
@@ -689,6 +768,10 @@ namespace ExMoreStuff
         /// <summary>A result in a sentence or two, for the player.</summary>
         public static string Describe(string name, Result r)
         {
+            // from the game's speed only: kept full speed (60 or more), or about how fast; nothing to compare (Estimated)
+            if (r.Estimated)
+                return r.FullSpeed ? name + " kept full speed (60 fps or more) in the game's benchmark. It should play at full speed on this PC."
+                                   : name + " ran at about " + r.Average.ToString("0") + " fps in the game's benchmark. It may not keep full speed (60 fps) on this PC.";
             // a costume has nothing to compare with (one run, user 2026-10-13); a stage, the PC check's Blast Furnace
             string compared = r.Baseline <= 0 || string.IsNullOrEmpty(r.Against) ? ""
                             : r.Slower < 5 ? ": about as fast as the game's own " + r.Against + " (" + r.Baseline.ToString("0") + " fps)"
@@ -709,12 +792,18 @@ namespace ExMoreStuff
         static void Write(string game, Pending p)
         {
             Directory.CreateDirectory(Game.PatchFolder(game));
-            File.WriteAllText(PendingPath(game), new JavaScriptSerializer().Serialize(p));
+            SafeFile.WriteAllText(PendingPath(game), new JavaScriptSerializer().Serialize(p), true);
         }
 
         static Pending Read(string game)
         {
-            try { return File.Exists(PendingPath(game)) ? new JavaScriptSerializer().Deserialize<Pending>(File.ReadAllText(PendingPath(game))) : null; }
+            // the note of a test under way, or the one before it when a crash left it unreadable (so Recover still puts
+            // the game's files back)
+            try
+            {
+                string text = SafeFile.ReadList(PendingPath(game), t => { try { new JavaScriptSerializer().Deserialize<Pending>(t); return true; } catch (Exception) { return false; } });
+                return text == null ? null : new JavaScriptSerializer().Deserialize<Pending>(text);
+            }
             catch (Exception) { return null; }
         }
     }

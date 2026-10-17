@@ -55,6 +55,13 @@ static class FakeGame
         // EXMS_FAKE_MODE: "crash" (a swapped run closes without a result), "slow" (a swapped run at 45 fps)
         string mode = Environment.GetEnvironmentVariable("EXMS_FAKE_MODE") ?? "";
         if (swapped && mode == "crash") return;
+        // "speed only": a swapped run as on a game whose benchmark the helper can't catch (a player 2026-10-15): the speed the
+        // game set, 60 / its average and never under 1 ("speed only slow": 45 fps)
+        if (swapped && mode.StartsWith("speed only"))
+        {
+            File.WriteAllText(request["result"], "speed=" + (mode == "speed only slow" ? "1.333" : "1.000") + "\r\nerror=the benchmark's own numbers weren't caught\r\n");
+            return;
+        }
         string average = swapped ? (mode == "slow" ? "45.000" : "250.000") : "297.000";
         File.WriteAllText(request["result"], "average=" + average + "\r\nlowest=55.000\r\nhighest=390.000\r\nframes=999\r\nhistogram=0,0,0,0,0,3,987\r\nspeed=1.000\r\n");
     }

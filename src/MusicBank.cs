@@ -604,12 +604,12 @@ namespace ExMoreStuff
         {
             Directory.CreateDirectory(AppFolders.Music);
             string name = LibraryName(slot, layer, song), stem = Path.Combine(AppFolders.Music, name);
-            File.WriteAllBytes(stem + ".csb", bank);
+            SafeFile.WriteAllBytes(stem + ".csb", bank);
             if (source != null && File.Exists(source) && !source.EndsWith(".csb", StringComparison.OrdinalIgnoreCase))
             {
                 string copy = stem + Path.GetExtension(source).ToLowerInvariant();
                 if (!string.Equals(Path.GetFullPath(copy), Path.GetFullPath(source), StringComparison.OrdinalIgnoreCase)) File.Copy(source, copy, true);
-                File.WriteAllText(stem + ".json", new JavaScriptSerializer().Serialize(new Dictionary<string, object>
+                SafeFile.WriteAllText(stem + ".json", new JavaScriptSerializer().Serialize(new Dictionary<string, object>
                 {
                     { "format", 1 }, { "loopStart", loopStart }, { "loopEnd", loopEnd }, { "settings", settings },
                 }));
@@ -796,11 +796,11 @@ namespace ExMoreStuff
 
         public static void Put(string zip, string file, byte[] bank, InstalledSong about)
         {
-            using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Update))
+            SafeFile.EditZip(zip, archive =>   // the docked file changed on a copy, swapped in when done (it may be the player's only one)
             {
                 foreach (var old in archive.Entries.Where(e => string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase)).ToList()) old.Delete();
                 using (Stream s = archive.CreateEntry(file).Open()) s.Write(bank, 0, bank.Length);
-            }
+            });
             about.File = file;
             about.Sha256 = Sha256(bank);
             var list = Load();
@@ -811,9 +811,12 @@ namespace ExMoreStuff
         /// <summary>Its music for `file` out of the docked file; false when there was none.</summary>
         public static bool TakeOut(string zip, string file)
         {
-            bool had = false;
-            using (var archive = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Update))
-                foreach (var old in archive.Entries.Where(e => string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase)).ToList()) { old.Delete(); had = true; }
+            bool had = SafeFile.EditZip(zip, archive =>
+            {
+                bool any = false;
+                foreach (var old in archive.Entries.Where(e => string.Equals(e.Name, file, StringComparison.OrdinalIgnoreCase)).ToList()) { old.Delete(); any = true; }
+                return any;
+            });
             var list = Load();
             if (list.Remove(Key(zip, file))) Save(list);
             return had;
@@ -833,7 +836,7 @@ namespace ExMoreStuff
         {
             if (list.Count == 0) { if (File.Exists(ListPath)) File.Delete(ListPath); return; }
             Directory.CreateDirectory(Path.GetDirectoryName(ListPath));
-            File.WriteAllText(ListPath, new JavaScriptSerializer().Serialize(list));
+            SafeFile.WriteAllText(ListPath, new JavaScriptSerializer().Serialize(list), true);
         }
     }
 }

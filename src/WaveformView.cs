@@ -39,7 +39,7 @@ namespace ExMoreStuff
         public int LoopStart { get { return loopStart; } set { loopStart = Clamp(value, 0, Math.Max(0, loopEnd - 1)); Invalidate(); } }
         public int LoopEnd { get { return loopEnd; } set { loopEnd = Clamp(value, loopStart + 1, frames); Invalidate(); } }
         public long CursorFrame { get { return cursor; } set { cursor = Math.Max(0, Math.Min(value, frames)); Invalidate(); } }
-        public long Playhead { get { return playhead; } set { if (playhead == value) return; playhead = value; Follow(); Invalidate(); } }
+        public long Playhead { get { return playhead; } set { if (playhead == value) return; playhead = value; Invalidate(); } }   // the view stays where it is (user 2026-10-16: it jumped to follow the song, "i want to look at the part im looking at")
         public int Frames { get { return frames; } }
 
         static int Clamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -110,14 +110,6 @@ namespace ExMoreStuff
             view0 = Math.Max(0, Math.Min(view0, frames - Width * perPixel));
         }
 
-        // keep the playhead in view while playing (page by page)
-        void Follow()
-        {
-            if (playhead < 0) return;
-            double x = (playhead - view0) / perPixel;
-            if (x < 0 || x > Width - 20) { view0 = playhead - 20 * perPixel; ClampView(); }
-        }
-
         int X(double frame) { return (int)Math.Round((frame - view0) / perPixel); }
         long FrameAt(int x) { return (long)Math.Round(view0 + x * perPixel); }
 
@@ -127,7 +119,12 @@ namespace ExMoreStuff
         {
             if (frames == 0) return;
             double at = view0 + e.X * perPixel;
-            perPixel *= e.Delta > 0 ? 0.8 : 1.25;
+            // the zoom kept within its limits first: at the closest (or the whole song) a turn changes nothing, where it
+            // used to slide the view sideways (user 2026-10-16: "when you reach the closest zoom scrolling in moves it")
+            double maxPer = Math.Max(1.0 / 16, frames / (double)Math.Max(1, Width));
+            double next = Math.Max(1.0 / 16, Math.Min(perPixel * (e.Delta > 0 ? 0.8 : 1.25), maxPer));
+            if (Math.Abs(next - perPixel) < 1e-12) return;
+            perPixel = next;
             view0 = at - e.X * perPixel;
             ClampView();
             Invalidate();

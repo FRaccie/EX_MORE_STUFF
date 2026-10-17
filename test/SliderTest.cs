@@ -44,6 +44,7 @@ namespace ExMoreStuff
 
             int before = list.VerticalScroll.Value;
             Call(slider, "OnMouseWheel", new MouseEventArgs(MouseButtons.None, 0, 8, 50, 120));
+            for (var glide = System.Diagnostics.Stopwatch.StartNew(); glide.ElapsedMilliseconds < 500; ) { Application.DoEvents(); System.Threading.Thread.Sleep(5); }   // the wheel glides there
             Check(list.VerticalScroll.Value < before, "the wheel over it scrolls up (" + list.VerticalScroll.Value + ")");
 
             list.ScrollTo(int.MaxValue);

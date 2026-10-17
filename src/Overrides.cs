@@ -61,7 +61,7 @@ namespace ExMoreStuff
         {
             if (list.Count == 0) { if (File.Exists(ListPath(game))) File.Delete(ListPath(game)); return; }
             Directory.CreateDirectory(Game.PatchFolder(game));
-            File.WriteAllText(ListPath(game), new JavaScriptSerializer().Serialize(list));
+            SafeFile.WriteAllText(ListPath(game), new JavaScriptSerializer().Serialize(list), true);
         }
 
         /// <summary>The override a replacement's source names ("override:<id>"), or null.</summary>
@@ -97,6 +97,7 @@ namespace ExMoreStuff
             string zip = old != null && !string.IsNullOrEmpty(old.Package) ? old.Package
                        : AppFolders.PlaceFor(folder, (clean.Length > 0 ? clean : "Override") + " - replaces " + target + ".zip", null);
             string temp = zip + ".making";
+            if (File.Exists(temp)) File.Delete(temp);   // left by a write a crash stopped
             using (ZipArchive archive = ZipFile.Open(temp, ZipArchiveMode.Create))
             {
                 Action<string, byte[]> add = (entry, data) => { using (Stream s = archive.CreateEntry(entry).Open()) s.Write(data, 0, data.Length); };
@@ -106,8 +107,7 @@ namespace ExMoreStuff
                 byte[] png = Pictures.Png(picture);   // a WebP one made readable (Pictures)
                 if (png != null) add("STG_" + target + ".png", png);
             }
-            if (File.Exists(zip)) File.Delete(zip);
-            File.Move(temp, zip);
+            SafeFile.Swap(temp, zip);   // the old zip until the new one is complete
 
             list.RemoveAll(o => o.Id == id);
             list.Add(new Override { Id = id, Name = name, Author = author, Version = version, Target = target, Package = zip });
@@ -116,6 +116,21 @@ namespace ExMoreStuff
             if (Replacements.Load(game).Any(r => r.Stage == target)) Replacements.Restore(game, target);
             Replacements.Replace(game, target, Prefix + id);
             return target;
+        }
+
+        /// <summary>An override out (Browse Mods' Uninstall): the game's own stage back where it played, off the list, its
+        /// zip to the Recycle Bin.</summary>
+        public static void Uninstall(string game, string id)
+        {
+            if (Game.IsRunning()) throw new InvalidOperationException("close the game first");
+            foreach (var r in Replacements.Load(game).Where(r => r.Source == Prefix + id).ToList()) Replacements.Restore(game, r.Stage);
+            var list = Load(game);
+            foreach (Override o in list.Where(o => o.Id == id).ToList())
+            {
+                if (!string.IsNullOrEmpty(o.Package) && File.Exists(o.Package)) PackagesPanel.RecycleZip(o.Package);
+                list.Remove(o);
+            }
+            Save(game, list);
         }
 
         /// <summary>An override's stage file for Replacements (".emz" or ".tex.emz", under its target's code), or null.</summary>

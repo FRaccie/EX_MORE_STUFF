@@ -62,10 +62,11 @@ namespace ExMoreStuff
             {
                 if (s == null) throw new InvalidOperationException("this copy of EX More Stuff was built without Tom's Round BGM mod");
                 s.CopyTo(data);
-                File.WriteAllBytes(DllPath(game), data.ToArray());
+                // the marker first: a crash between the two then leaves a DLL EX More Stuff knows is its own
+                Directory.CreateDirectory(Game.PatchFolder(game));
+                File.WriteAllText(MarkerPath(game), "dinput8.dll next to SSFIV.exe: Tom's Round BGM mod, put in by EX More Stuff for round 2 and 3 music\r\n");
+                SafeFile.WriteAllBytes(DllPath(game), data.ToArray());
             }
-            Directory.CreateDirectory(Game.PatchFolder(game));
-            File.WriteAllText(MarkerPath(game), "dinput8.dll next to SSFIV.exe: Tom's Round BGM mod, put in by EX More Stuff for round 2 and 3 music\r\n");
             return null;
         }
 
