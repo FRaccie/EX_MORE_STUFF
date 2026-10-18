@@ -1,6 +1,6 @@
 {
   "format": 1,
   "name": "EX More Stuff",
-  "program": { "version": "0.92", "page": "https://github.com/oopswhats/EX_MORE_STUFF/releases", "news": "Creators can insert custom color images." },
+  "program": { "version": "0.93", "page": "https://github.com/oopswhats/EX_MORE_STUFF/releases", "news": "Creators: one upload works with and without EX More Stuff" },
   "items": []
 }

@@ -57,6 +57,15 @@ namespace ExMoreStuff
         /// game's stages), or its own code when it holds it, a not-free one too (user 2026-10-15: their Downtime in
         /// Antarctica, STG_A02 on GameBanana, went in as U01: "not free" is a warning for picking a code, not for a mod
         /// already holding it); null: a personal one.</summary>
+        // a mod's slot_<FIGHTER>_<NN>.txt slots, for fighters it has exactly one of the game's costumes of (several: none)
+        static Dictionary<string, int> OwnSlots(IList<string> paths)
+        {
+            var named = SkinImport.Named(paths).Where(c => c.Item2 < Catalog.FirstCustomCostume).ToList();
+            return Overrides.OwnSlots(paths).Where(o => named.Count(c => c.Item1 == o.Key) == 1).ToDictionary(o => o.Key, o => o.Value);
+        }
+
+        static Dictionary<string, int> OwnSlots(IEnumerable<string> paths) { return OwnSlots(paths.ToList()); }
+
         public static string StageCode(GameBanana.Mod mod, string code)
         {
             string given;
@@ -88,11 +97,20 @@ namespace ExMoreStuff
                 if (mod != null) holders[given.Value] = mod;
             }
             foreach (var mod in list.OrderBy(m => m.Added).ThenBy(m => m.Id))
-                foreach (var costume in SkinImport.Named(mod.Files.Where(f => f.Clean).SelectMany(f => f.Contents)))
+            {
+                var paths = mod.Files.Where(f => f.Clean).SelectMany(f => f.Contents).ToList();
+                // slot_<FIGHTER>_<NN>.txt: the slot its game-costume files hold (user 2026-10-18)
+                foreach (var own in OwnSlots(paths))
+                {
+                    string code = Code(own.Key, own.Value);
+                    if (!holders.ContainsKey(code)) holders[code] = mod;
+                }
+                foreach (var costume in SkinImport.Named(paths))
                 {
                     string code = Code(costume.Item1, costume.Item2);
                     if (costume.Item2 >= Catalog.FirstCustomCostume && costume.Item2 <= Catalog.LastShared && !holders.ContainsKey(code)) holders[code] = mod;
                 }
+            }
             Held = new HashSet<string>(holders.Keys);
             var heldBy = new Dictionary<string, GameBanana.Mod>(holders);
             foreach (var given in GivenStages)
@@ -121,6 +139,16 @@ namespace ExMoreStuff
         public static int Slot(GameBanana.Mod mod, string fighter, int number, Dictionary<string, GameBanana.Mod> holders)
         {
             if (number > Catalog.LastShared) return 0;   // a personal seat, or not free
+            if (number < Catalog.FirstCustomCostume)
+            {
+                // slot_<FIGHTER>_<NN>.txt beside one of the game's costumes: that slot, when this mod holds it
+                int own;
+                if (OwnSlots(mod.Files.Where(f => f.Clean).SelectMany(f => f.Contents)).TryGetValue(fighter, out own))
+                {
+                    GameBanana.Mod holder;
+                    return holders.TryGetValue(Code(fighter, own), out holder) && holder.Id == mod.Id ? own : 0;
+                }
+            }
             if (number >= Catalog.FirstCustomCostume)
             {
                 GameBanana.Mod holder;

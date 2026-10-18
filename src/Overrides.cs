@@ -59,6 +59,21 @@ namespace ExMoreStuff
             return codes.Count == 1 && Stages.IsCustomCode(codes[0]) ? codes[0] : null;
         }
 
+        // A costume's own shared slot in EX More Stuff (user 2026-10-18, as code_<CODE>.txt for stages): slot_<FIGHTER>_<NN>.txt
+        // (slot_RYU_08.txt) beside files of one of the game's costumes (RYU_01...), so one upload replaces that costume for
+        // players copying it in by hand and is its own costume in shared slot NN (8 up to the last shared one) in EX More
+        // Stuff, once its GameBanana mod holds that slot (SharedCodes). One a fighter.
+        static readonly Regex SlotMarker = new Regex(@"^slot_([A-Za-z0-9]{3})_(\d\d)\.txt$", RegexOptions.IgnoreCase);
+
+        /// <summary>Each fighter's shared slot a mod's slot_<FIGHTER>_<NN>.txt gives it (one marker a fighter, a shared slot).</summary>
+        public static Dictionary<string, int> OwnSlots(IEnumerable<string> paths)
+        {
+            var found = paths.Select(p => SlotMarker.Match(Name(p))).Where(m => m.Success)
+                .Select(m => new { Fighter = m.Groups[1].Value.ToUpperInvariant(), Slot = int.Parse(m.Groups[2].Value) }).Distinct().ToList();
+            return found.Where(f => Fighters.IsCode(f.Fighter) && f.Slot >= Catalog.FirstCustomCostume && f.Slot <= Catalog.LastShared)
+                .GroupBy(f => f.Fighter).Where(g => g.Count() == 1).ToDictionary(g => g.Key, g => g.First().Slot);
+        }
+
         // A mod made for a newer EX More Stuff (user 2026-10-18: "a stage uploaded with this file will need old EXMS version
         // users to require an update"): needs_exms_<version>.txt (needs_exms_0.93.txt) in it; older versions refuse it.
         // Versions before 0.92 don't know this file.

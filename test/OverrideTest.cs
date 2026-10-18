@@ -122,6 +122,26 @@ namespace ExMoreStuff
             Check(Overrides.TooNew(new[] { "needs_exms_0.92.txt" }) == null && Overrides.TooNew(new[] { "needs_exms_0.5.txt" }) == null && Overrides.TooNew(new[] { "readme.txt" }) == null,
                   "this version or older, or none: fine");
 
+            Console.WriteLine("slot_<FIGHTER>_<NN>.txt: a game costume's files, its own shared slot (user 2026-10-18)");
+            Func<long, long, string[], GameBanana.Mod> gb = (id, added, names) =>
+            {
+                var m = new GameBanana.Mod { Id = id, Added = added, Name = "mod " + id };
+                var f = new GameBanana.ModFile { Id = id, Name = "m" + id + ".zip", Clean = true };
+                f.Contents.AddRange(names);
+                m.Files.Add(f);
+                return m;
+            };
+            var ryu = gb(501, 100, new[] { "RYU_01.obj.emo", "RYU_01.nml.emb", "RYU_01_01.col.emb", "slot_RYU_61.txt" });
+            var holders = SharedCodes.Holders(new[] { ryu });
+            Check(holders.ContainsKey("RYU 61") && holders["RYU 61"].Id == 501 && SharedCodes.Slot(ryu, "RYU", 1, holders) == 61, "RYU_01 files with slot_RYU_61.txt: shared slot 61");
+            var earlier = gb(400, 50, new[] { "RYU_61.obj.emo", "RYU_61.nml.emb", "RYU_61_01.col.emb" });
+            holders = SharedCodes.Holders(new[] { ryu, earlier });
+            Check(SharedCodes.Slot(ryu, "RYU", 1, holders) == 0 && SharedCodes.Slot(earlier, "RYU", 61, holders) == 61, "an earlier upload holds RYU 61: this one goes in a personal slot");
+            var twoRyu = gb(502, 100, new[] { "RYU_01.obj.emo", "RYU_02.obj.emo", "slot_RYU_09.txt" });
+            Check(SharedCodes.Slot(twoRyu, "RYU", 1, SharedCodes.Holders(new[] { twoRyu })) == 0, "two of the game's costumes: the marker isn't used");
+            Check(Overrides.OwnSlots(new[] { "slot_RYU_80.txt", "slot_XXX_10.txt", "slot_ken_12.txt" }).Select(o => o.Key + o.Value).SequenceEqual(new[] { "KEN12" }),
+                  "a personal slot or not a fighter: none; lower case fine");
+
             Console.WriteLine(failures == 0 ? "All passed" : failures + " failed");
             Environment.Exit(failures == 0 ? 0 : 1);
         }
