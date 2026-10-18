@@ -60,10 +60,11 @@ namespace ExMoreStuff
 
         /// <summary>Color `wanted` of a costume, or when a package of EX More Stuff's (or a file it didn't put there) has it,
         /// the first free one from 30 up; 0 when none is left.</summary>
-        public static int FreeColor(string game, string fighter, int costume, int wanted)
+        public static int FreeColor(string game, string fighter, int costume, int wanted, ICollection<int> alsoTaken = null)
         {
             var taken = new HashSet<int>(Installer.Load(game).Concat(Installer.Removed(game)).Concat(Docked.Load())
                 .Where(r => r.Item.IsColor && r.Item.Fighter == fighter && r.Item.Slot == costume).Select(r => r.Item.Color));
+            if (alsoTaken != null) taken.UnionWith(alsoTaken);   // numbers given to the same pack's other colors
             Func<int, bool> free = n => !taken.Contains(n) && !File.Exists(Path.Combine(Game.PatchFolder(game), "battle", "chara", fighter,
                 fighter + "_" + costume.ToString("D2") + "_" + n.ToString("D2") + ".col.emb"));
             if (wanted >= Catalog.FirstCustomColor && wanted <= Catalog.LastColor && free(wanted)) return wanted;
@@ -258,6 +259,8 @@ namespace ExMoreStuff
             // instead of into the game, which then can stay open; music and override stages go straight into the game, so
             // they're left out
             if (dock == null && Game.IsRunning()) throw new InvalidOperationException("close the game first");
+            string tooNew = Overrides.TooNew(files.Select(f => f.Key));   // needs_exms_<version>.txt: made for a newer EX More Stuff
+            if (tooNew != null) throw new InvalidDataException("it " + tooNew);
             string patch = Game.PatchFolder(game);
             name = name.Trim();
             // an override stage (override_KOR.txt in it): in its game stage's place, no code of its own (Overrides)
@@ -340,38 +343,60 @@ namespace ExMoreStuff
                 }
                 catch (Exception ex) { result.Problems.Add(place + ": " + ex.Message); }
             }
-            // a new color: its own number, unless another package has that one (then the first free from 30)
-            foreach (var color in colors)
+            // new colors: each its own number, unless another package has that one (then the first free from 30); a mod's
+            // colors of one costume in one zip, one install (user 2026-10-18: "one install hold all the colors"), each color
+            // still switched on and off by itself
+            foreach (var costume in colors.GroupBy(c => c.Fighter + "_" + c.Costume.ToString("D2")))
             {
                 var records = Installer.Load(game).Concat(Installer.Removed(game)).ToList();
-                string itemId = id + ":" + color.Fighter + color.Costume.ToString("D2") + "_" + color.Number.ToString("D2");
-                Installed again = records.FirstOrDefault(r => r.Item.Id == itemId);
-                int number = again != null ? again.Item.Color : FreeColor(game, color.Fighter, color.Costume, color.Number);
-                if (number == 0) { result.Problems.Add(color.Describe + ": colors " + Catalog.FirstCustomColor + "-" + Catalog.LastColor + " are all in use"); continue; }
-                var item = new Item
+                var numbers = new List<int>();
+                var made = new List<Item>();
+                var package = new List<KeyValuePair<string, byte[]>>();
+                var before = new List<string>();   // the zips its colors had before (a zip each, older versions)
+                foreach (var color in costume)
                 {
-                    Id = itemId, Type = "color", Fighter = color.Fighter, Slot = color.Costume, Color = number, Code = "", Name = name, Author = author ?? "", Version = version,
-                    Description = name + credit + ": a new color", Picture = "", Download = "", Sha256 = "",
-                };
-                string into = Fighters.Name(item.Fighter) + " " + item.TitleNamed(null).ToLowerInvariant();
-                string zip = Path.Combine(AppFolders.PackagesFor(item), clean + " - " + item.Prefix + ".zip");
+                    string itemId = id + ":" + color.Fighter + color.Costume.ToString("D2") + "_" + color.Number.ToString("D2");
+                    Installed again = records.FirstOrDefault(r => r.Item.Id == itemId);
+                    int number = again != null ? again.Item.Color : FreeColor(game, color.Fighter, color.Costume, color.Number, numbers);
+                    if (number == 0) { result.Problems.Add(color.Describe + ": colors " + Catalog.FirstCustomColor + "-" + Catalog.LastColor + " are all in use"); continue; }
+                    byte[] emm = color.Emm ?? CostumeFile(game, color.Fighter, color.Fighter + "_" + color.Costume.ToString("D2") + "_01.obj.emm");
+                    if (emm == null) { result.Problems.Add(color.Describe + ": it has no material (.obj.emm) and the costume's color 1 has none to lend"); continue; }
+                    numbers.Add(number);
+                    var item = new Item
+                    {
+                        Id = itemId, Type = "color", Fighter = color.Fighter, Slot = color.Costume, Color = number, Code = "", Name = name, Author = author ?? "", Version = version,
+                        Description = name + credit + ": a new color", Picture = "", Download = "", Sha256 = "",
+                    };
+                    made.Add(item);
+                    package.Add(new KeyValuePair<string, byte[]>(item.Prefix + ".col.emb", color.Col));
+                    package.Add(new KeyValuePair<string, byte[]>(item.Prefix + ".obj.emm", emm));
+                    byte[] png = color.Png ?? Png(picture);
+                    if (png != null) package.Add(new KeyValuePair<string, byte[]>(item.Prefix + ".png", png));
+                    if (again != null && !string.IsNullOrEmpty(again.Package)) before.Add(again.Package);
+                }
+                if (made.Count == 0) continue;
+                Item one = made[0];
+                string zip = Path.Combine(AppFolders.PackagesFor(one), clean + " - " + (made.Count == 1 ? one.Prefix : costume.Key + " colors") + ".zip");
+                string into = Fighters.Name(one.Fighter) + " " + (made.Count == 1 ? one.TitleNamed(null).ToLowerInvariant()
+                              : (one.Slot < Catalog.FirstCustomCostume ? "costume " : "slot ") + one.Slot + " colors " + string.Join(", ", made.Select(i => i.Color)));
                 say("Putting " + name + " in as " + into + "...");
                 try
                 {
-                    byte[] emm = color.Emm ?? CostumeFile(game, color.Fighter, color.Fighter + "_" + color.Costume.ToString("D2") + "_01.obj.emm");
-                    if (emm == null) throw new FileNotFoundException("it has no material (.obj.emm) and the costume's color 1 has none to lend");
-                    var package = new List<KeyValuePair<string, byte[]>>
-                    {
-                        new KeyValuePair<string, byte[]>(item.Prefix + ".col.emb", color.Col), new KeyValuePair<string, byte[]>(item.Prefix + ".obj.emm", emm),
-                    };
-                    byte[] png = color.Png ?? Png(picture);
-                    if (png != null) package.Add(new KeyValuePair<string, byte[]>(item.Prefix + ".png", png));
                     Write(package, zip);
-                    if (dock != null) dock(zip); else Installer.InstallPackage(game, item, zip, "file");
+                    if (dock != null) dock(zip);
+                    else foreach (Item item in made) Installer.InstallPackage(game, item, zip, "file");
                     result.Into.Add(into);
                 }
-                catch (Exception ex) { result.Problems.Add(color.Describe + ": " + ex.Message); }
+                catch (Exception ex) { result.Problems.Add(Fighters.Name(one.Fighter) + " " + costume.Key + " colors: " + ex.Message); continue; }
+                // an older version's zips, now nothing uses them: to the Recycle Bin
+                var now = Installer.Load(game).Concat(Installer.Removed(game)).Select(r => r.Package).Where(p => p != null).Concat(Docked.Load().Select(r => r.Package)).ToList();
+                foreach (string old in before.Distinct(StringComparer.OrdinalIgnoreCase))
+                    if (!string.Equals(Path.GetFullPath(old), Path.GetFullPath(zip), StringComparison.OrdinalIgnoreCase) && File.Exists(old) && AppFolders.Inside(old, AppFolders.Mods) &&
+                        !now.Any(p => string.Equals(Path.GetFullPath(p), Path.GetFullPath(old), StringComparison.OrdinalIgnoreCase)))
+                        try { PackagesPanel.RecycleZip(old); } catch (Exception) { }
             }
+            // code_<CODE>.txt: the stage's own code here, its files under a game stage's code for players without EX More Stuff
+            string ownCode = stages.Count == 1 ? Overrides.OwnCode(files.Select(f => f.Key)) : null;
             foreach (var stage in stages)
             {
                 if (dock != null)
@@ -383,7 +408,7 @@ namespace ExMoreStuff
                 string itemId = id + ":STG_" + stage.Code + (stage.Folder != "" ? ":" + stage.Folder : "");
                 Installed again = records.FirstOrDefault(r => r.Item.Id == itemId);
                 // its shared code (a GameBanana stage's), else a personal one
-                string shared = sharedStage != null ? sharedStage(stage.Code) : null;
+                string shared = sharedStage != null ? sharedStage(ownCode ?? stage.Code) : null;
                 // in under a personal code from before its own could be shared (A## and T## codes, before 2026-10-15):
                 // it moves to its own (taken out under the old one, its old zip to the Recycle Bin)
                 if (again != null && shared != null && again.Item.Code != shared && dock == null)

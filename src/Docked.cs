@@ -26,8 +26,8 @@ namespace ExMoreStuff
             var result = new List<Installed>();
             foreach (string path in kept)
             {
-                Item item = Installer.Package(path);   // one that isn't a package any more stays listed, shown again once it is
-                if (item != null) result.Add(new Installed { Item = item, Package = path, Source = Source });
+                // one that isn't a package any more stays listed, shown again once it is; a color pack's zip: each color
+                foreach (Item item in Installer.Packages(path)) result.Add(new Installed { Item = item, Package = path, Source = Source });
             }
             return result;
         }

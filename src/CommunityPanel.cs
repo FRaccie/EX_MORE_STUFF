@@ -299,6 +299,8 @@ namespace ExMoreStuff
         // the stages a mod's files are made from (TRN, or codes of their own)
         static IEnumerable<string> StageCodes(GameBanana.Mod mod)
         {
+            string own = Overrides.OwnCode(mod.Files.Where(f => f.Clean).SelectMany(f => f.Contents));   // code_<CODE>.txt
+            if (own != null) return new[] { own };
             return mod.Files.Where(f => f.Clean).SelectMany(f => f.Contents).Select(c => c.Substring(c.LastIndexOf('/') + 1))
                 .Where(n => n.StartsWith("STG_", StringComparison.OrdinalIgnoreCase) && n.EndsWith(".emz", StringComparison.OrdinalIgnoreCase) && n.Length >= 11)
                 .Select(n => n.Substring(4, 3).ToUpperInvariant()).Distinct();
@@ -722,6 +724,8 @@ namespace ExMoreStuff
             bool song = IsSong(mod);   // a song mod: nothing goes in the game, so it may be open, and no PC check
             string blocked = song ? (Blocked != null ? Blocked() : null) : CantInstall();
             if (blocked != null) { Say("Can't install it now: " + blocked, true); return false; }
+            string tooNew = Overrides.TooNew(Wanted(mod).SelectMany(f => f.Contents));   // made for a newer EX More Stuff
+            if (tooNew != null) { Say(mod.Name + " " + tooNew, true); return false; }
             string moves = SkinImport.ChangesMoves(Wanted(mod).SelectMany(f => f.Contents));
             if (moves != null && !SkinImport.AllowMoveMods) { Say(mod.Name + " can't be installed: " + moves + ", for every costume (online that's a desync), and its model may need them", true); return false; }
             if (BeforeInstall != null && !song) await BeforeInstall();
@@ -774,7 +778,7 @@ namespace ExMoreStuff
                 else
                 {
                     var costumes = SkinImport.Find(everything);
-                    var stageFiles = everything.Where(f => StageFile(f.Key)).ToList();
+                    var stageFiles = everything.Where(f => StageFile(f.Key) || Overrides.IsCodeMarker(f.Key)).ToList();   // code_<CODE>.txt: its own code
                     // a color pack (new colors 30-99 for a costume, no model: user 2026-10-17, the Dee Jay white pants upload):
                     // in as Add Mod From File puts colors in, each color its own
                     var colorFiles = costumes.Count == 0 && stageFiles.Count == 0 && ModFile.FindColors(everything).Count > 0

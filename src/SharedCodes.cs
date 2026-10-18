@@ -101,12 +101,18 @@ namespace ExMoreStuff
                 if (mod != null) heldBy["stage " + given.Value] = mod;
             }
             foreach (var mod in list.OrderBy(m => m.Added).ThenBy(m => m.Id))
-                foreach (string path in mod.Files.Where(f => f.Clean).SelectMany(f => f.Contents))
+            {
+                var paths = mod.Files.Where(f => f.Clean).SelectMany(f => f.Contents).ToList();
+                // code_<CODE>.txt: the code its stage holds (its files under a game stage's code: user 2026-10-18)
+                string own = Overrides.OwnCode(paths);
+                if (own != null) { if (!heldBy.ContainsKey("stage " + own)) heldBy["stage " + own] = mod; continue; }
+                foreach (string path in paths)
                 {
                     var m = StageFile.Match(path.Substring(path.LastIndexOf('/') + 1));
                     string code = m.Success ? m.Groups[1].Value.ToUpperInvariant() : null;
                     if (code != null && Stages.IsCustomCode(code) && !heldBy.ContainsKey("stage " + code)) heldBy["stage " + code] = mod;
                 }
+            }
             HeldBy = heldBy;
             return holders;
         }

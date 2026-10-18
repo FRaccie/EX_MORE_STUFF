@@ -97,6 +97,31 @@ namespace ExMoreStuff
             try { Overrides.Install(game, two, "x", "Two", null, null, null); } catch (InvalidDataException ex) { problem = ex.Message; }
             Check(problem == "it has more than one stage and none named STG_KOR", "two stages, neither named for KOR: " + problem);
 
+            Console.WriteLine("code_<CODE>.txt: a game stage's files, its own code in EX More Stuff (user 2026-10-18)");
+            Check(Overrides.OwnCode(new[] { "x/code_t01.txt", "STG_LBX.emz" }) == "T01" && Overrides.OwnCode(new[] { "code_KOR.txt" }) == null &&
+                  Overrides.OwnCode(new[] { "code_T01.txt", "code_T02.txt" }) == null, "code_t01.txt: T01; a game stage's code or two codes: none");
+            var coded = new List<KeyValuePair<string, byte[]>>
+            {
+                new KeyValuePair<string, byte[]>("STG_TRN.emz", trn(".emz")),
+                new KeyValuePair<string, byte[]>("STG_TRN.tex.emz", trn(".tex.emz")),
+                new KeyValuePair<string, byte[]>("code_T01.txt", new byte[0]),
+            };
+            string asked = null;
+            result = ModFile.InstallFiles(game, coded, "gamebanana:7", "Lab Copy", null, "", null, s => { }, "", c => { asked = c; return c == "T01" ? "T01" : null; });
+            Installed lab = Installer.Load(game).SingleOrDefault(r => r.Item.IsStage && r.Item.Code == "T01");
+            Check(asked == "T01" && lab != null && result.Shared && result.Into.SequenceEqual(new[] { "stage T01" }), "in as its own stage T01, shared: " + string.Join(", ", result.Problems.Concat(result.Into)));
+            byte[] t01 = File.ReadAllBytes(Path.Combine(Game.PatchFolder(game), "battle", "stage", "STG_T01.emz"));
+            Check(Names(t01).Any(n => n.StartsWith("T01_")) && !Names(t01).Any(n => n.StartsWith("TRN_")), "re-coded as it went in: TRN_ entries now T01_");
+            Check(Replacements.Load(game).Count == 0 && Overrides.Load(game).Count == 0, "not a replacement here");
+
+            Console.WriteLine("needs_exms_<version>.txt");
+            var later = new List<KeyValuePair<string, byte[]>>(coded) { new KeyValuePair<string, byte[]>("needs_exms_9.5.txt", new byte[0]) };
+            problem = null;
+            try { ModFile.InstallFiles(game, later, "file:later", "Later", null, "", null, s => { }); } catch (InvalidDataException ex) { problem = ex.Message; }
+            Check(problem != null && problem.StartsWith("it needs EX More Stuff 9.5 or newer. "), "refused, asks for 9.5: " + problem);
+            Check(Overrides.TooNew(new[] { "needs_exms_0.92.txt" }) == null && Overrides.TooNew(new[] { "needs_exms_0.5.txt" }) == null && Overrides.TooNew(new[] { "readme.txt" }) == null,
+                  "this version or older, or none: fine");
+
             Console.WriteLine(failures == 0 ? "All passed" : failures + " failed");
             Environment.Exit(failures == 0 ? 0 : 1);
         }

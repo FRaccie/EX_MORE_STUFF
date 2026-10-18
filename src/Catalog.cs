@@ -127,8 +127,11 @@ namespace ExMoreStuff
 
         // The latest EX More Stuff, if the catalog names it: "program": { "version": "0.2", "page": "https://..." }, and
         // optionally "download" (the zip itself); without it, the zip GitHub serves for that version's release
-        // (<page>/download/v0.2/EXMoreStuff-0.2.zip, as make_publish names it).
+        // (<page>/download/v0.2/EXMoreStuff-0.2.zip, as make_publish names it). Optionally "news": a line or two on what the
+        // version brings, shown when the pointer is on the update link (user 2026-10-18: "hover the update message to briefly
+        // explain the update"). Versions before 0.92 don't read it.
         public static Version ProgramVersion { get; private set; }
+        public static string ProgramNews { get; private set; }
         public static string ProgramPage { get; private set; }
         public static string ProgramDownload { get; private set; }
 
@@ -158,6 +161,7 @@ namespace ExMoreStuff
             {
                 ProgramVersion = version;
                 ProgramPage = Convert.ToString(about["page"]);
+                ProgramNews = about.ContainsKey("news") ? (Convert.ToString(about["news"]) ?? "").Trim() : "";
                 string download = about.ContainsKey("download") ? Convert.ToString(about["download"]) : null;
                 ProgramDownload = download != null && download.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? download
                                 : ProgramPage.TrimEnd('/') + "/download/v" + version + "/EXMoreStuff-" + version + ".zip";

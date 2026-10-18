@@ -143,7 +143,9 @@ namespace ExMoreStuff
         static Regex AllowedNames(Item item)
         {
             string p = Regex.Escape(item.Prefix);
-            if (item.IsColor) return new Regex("^" + p + @"\.(col\.emb|obj\.emm|png)$", RegexOptions.IgnoreCase);
+            // a color's zip may hold the pack's other colors of that costume too (user 2026-10-18: "one install hold all the
+            // colors"): only its own go in (InstallPackage)
+            if (item.IsColor) return new Regex("^" + Regex.Escape(item.Fighter + "_" + item.Slot.ToString("D2")) + @"_\d\d\.(col\.emb|obj\.emm|png)$", RegexOptions.IgnoreCase);
             return item.IsStage
                 ? new Regex("^(" + p + @"\.(emz|tex\.emz|png|jpg)|BGM_" + Regex.Escape(item.Code) + @"[23]?\.csb)$", RegexOptions.IgnoreCase)
                 : new Regex("^" + p + @"(\.(obj\.emo|shd\.emo|nml\.emb|bsr|csb|png)|_(E|J)\.csb|_(0[1-9]|10)\.(col\.emb|obj\.emm|png))$", RegexOptions.IgnoreCase);   // _E/_J.csb: its voice
@@ -158,7 +160,8 @@ namespace ExMoreStuff
             {
                 if (e.FullName.EndsWith("/")) continue;                      // folder entries carry nothing
                 if (e.FullName != e.Name) return "files must not be in folders (" + e.FullName + ")";
-                if (!allowed.IsMatch(e.Name)) return "unexpected file " + e.Name + " (a " + (item.IsStage ? "stage" : item.IsColor ? "color" : "costume") + " here holds only " + item.Prefix + " files)";
+                if (!allowed.IsMatch(e.Name)) return "unexpected file " + e.Name + " (a " + (item.IsStage ? "stage" : item.IsColor ? "color" : "costume") + " here holds only " +
+                                                      (item.IsColor ? item.Fighter + "_" + item.Slot.ToString("D2") + "_<color>" : item.Prefix) + " files)";
                 names.Add(e.Name);
             }
             if (item.IsStage)
@@ -230,7 +233,8 @@ namespace ExMoreStuff
             {
                 string problem = CheckPackage(zip, item);
                 if (problem != null) throw new InvalidDataException(problem);
-                var files = zip.Entries.Where(e => !e.FullName.EndsWith("/")).ToList();
+                // (a color: its own files, not the pack's other colors in the same zip)
+                var files = zip.Entries.Where(e => !e.FullName.EndsWith("/") && (!item.IsColor || e.Name.StartsWith(item.Prefix + ".", StringComparison.OrdinalIgnoreCase))).ToList();
                 // Never write over a file EX More Stuff didn't put there.
                 foreach (ZipArchiveEntry e in files)
                 {
@@ -472,6 +476,78 @@ namespace ExMoreStuff
                     return CheckPackage(zip, item) == null ? item : null;
             }
             catch (Exception) { return null; }   // not a zip, or not readable as one
+        }
+
+        /// <summary>Every item a package installs as: one, or a color pack's colors of one costume in one zip (user 2026-10-18:
+        /// "one install hold all the colors"), an item each (a color switched off by itself is out of the game, its files
+        /// still in the zip). None: not a package.</summary>
+        public static List<Item> Packages(string path)
+        {
+            var items = new List<Item>();
+            Item first = Package(path);
+            if (first == null) return items;
+            if (!first.IsColor) { items.Add(first); return items; }
+            try
+            {
+                var color = new Regex("^" + Regex.Escape(first.Fighter + "_" + first.Slot.ToString("D2")) + @"_(\d\d)\.col\.emb$", RegexOptions.IgnoreCase);
+                using (ZipArchive zip = ZipFile.OpenRead(path))
+                    foreach (int n in zip.Entries.Select(e => color.Match(e.Name)).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value)).Distinct().OrderBy(n => n))
+                    {
+                        Item item = Item.FromJson(first.ToJson());
+                        item.Color = n;
+                        if (item.Problem() == null && CheckPackage(zip, item) == null) items.Add(item);
+                    }
+            }
+            catch (Exception) { }
+            return items;
+        }
+
+        /// <summary>A pack's colors added before 0.92, a zip each in its folder in Mods\: put in one zip there (user
+        /// 2026-10-18: "one install hold all the colors"), their old zips to the Recycle Bin. Only EX More Stuff's own zips
+        /// that hold one color and nothing another package uses. Returns how many packs.</summary>
+        public static int MergeColorZips(string game, Action<string> discard = null)
+        {
+            var records = Load(game);
+            var removed = Removed(game);
+            var all = records.Concat(removed).ToList();
+            Func<string, string, bool> same = (a, b) => a != null && b != null && string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+            int merged = 0;
+            var old = new List<string>();
+            foreach (var pack in all.Where(r => r.Item.IsColor && r.Source == "file" && !r.Theirs && !string.IsNullOrEmpty(r.Package) && File.Exists(r.Package) && AppFolders.Inside(r.Package, AppFolders.Mods))
+                                    .GroupBy(r => r.Item.Fighter + "|" + r.Item.Slot + "|" + (r.Shown ?? r.Item.Name) + "|" + Path.GetDirectoryName(Path.GetFullPath(r.Package)).ToLowerInvariant()))
+            {
+                var members = pack.ToList();
+                var zips = members.Select(r => Path.GetFullPath(r.Package)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (zips.Count < 2 || zips.Count != members.Count) continue;   // already one zip, or zips shared some other way
+                if (zips.Any(z => all.Any(r => !members.Contains(r) && same(r.Package, z)))) continue;
+                var entries = new List<KeyValuePair<string, byte[]>>();
+                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                bool ok = true;
+                foreach (Installed r in members)
+                    using (ZipArchive zip = ZipFile.OpenRead(r.Package))
+                        foreach (ZipArchiveEntry e in zip.Entries.Where(e => !e.FullName.EndsWith("/")))
+                        {
+                            if (!e.Name.StartsWith(r.Item.Prefix + ".", StringComparison.OrdinalIgnoreCase)) { ok = false; break; }   // not one color's zip
+                            if (!names.Add(e.Name)) continue;
+                            using (Stream s = e.Open())
+                            using (var data = new MemoryStream()) { s.CopyTo(data); entries.Add(new KeyValuePair<string, byte[]>(e.Name, data.ToArray())); }
+                        }
+                if (!ok) continue;
+                Item first = members[0].Item;
+                string stem = Path.GetFileNameWithoutExtension(members[0].Package);
+                string suffix = " - " + first.Prefix;
+                if (stem.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) stem = stem.Substring(0, stem.Length - suffix.Length);
+                string folder = Path.GetDirectoryName(Path.GetFullPath(members[0].Package));
+                string to = AppFolders.PlaceFor(folder, stem + " - " + first.Fighter + "_" + first.Slot.ToString("D2") + " colors.zip", null);
+                ModFile.Write(entries, to);
+                foreach (Installed r in members) r.Package = to;
+                old.AddRange(zips);
+                merged++;
+            }
+            if (merged == 0) return 0;
+            Save(game, records, removed);
+            foreach (string z in old) try { (discard ?? PackagesPanel.RecycleZip)(z); } catch (Exception) { }   // (a test deletes them)
+            return merged;
         }
 
         public static Item Inspect(string zipPath)

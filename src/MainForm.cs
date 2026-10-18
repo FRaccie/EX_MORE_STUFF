@@ -306,7 +306,7 @@ namespace ExMoreStuff
         {
             if (!Game.IsGameFolder(game)) return;
             string g = game;
-            try { await Task.Run(() => Installer.AdoptPackages(g)); }
+            try { await Task.Run(() => { Installer.AdoptPackages(g); Installer.MergeColorZips(g); }); }   // a pack's colors in one zip (0.92)
             catch (Exception ex) { MessageBox.Show(this, "Some packages couldn't be put in " + AppFolders.Mods + ": " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
 
@@ -389,7 +389,8 @@ namespace ExMoreStuff
             link.Location = new Point(tagline.Left, tagline.Top + (tagline.Height - TextRenderer.MeasureText(link.Text, link.Font).Height) / 2);
             tagline.Visible = false;
             link.LinkClicked += async (s, e) => await UpdateProgram();
-            tips.SetToolTip(link, "Get the new EX More Stuff: " + Catalog.ProgramPage);
+            string news = Catalog.ProgramNews;   // what it brings, from the catalog (user 2026-10-18)
+            tips.SetToolTip(link, (string.IsNullOrEmpty(news) ? "" : news + "\n\n") + "Get the new EX More Stuff: " + Catalog.ProgramPage);
             header.Controls.Add(link);
             link.BringToFront();
         }
@@ -714,10 +715,10 @@ namespace ExMoreStuff
         }
 
         // Reload after one package changed (deleted, moved): the other changes waiting for Apply stay waiting.
-        void ReloadKeeping(string gone)
+        void ReloadKeeping(params string[] gone)
         {
-            var keepWanted = wanted.Where(w => w.Key != gone).ToList();
-            var keepNames = wantedNames.Where(w => w.Key != gone).ToList();
+            var keepWanted = wanted.Where(w => !gone.Contains(w.Key)).ToList();
+            var keepNames = wantedNames.Where(w => !gone.Contains(w.Key)).ToList();
             var keepReplaced = wantedReplaced.ToList();
             var keepSwaps = wantedSwaps.ToList();
             Reload();
@@ -832,6 +833,7 @@ namespace ExMoreStuff
 
         CostumeGrid costumeGrid;   // the open fighter's game costumes (their colors and extra colors), or null
         readonly Dictionary<string, ItemCard> colorCards = new Dictionary<string, ItemCard>();   // its extra colors' cards, by key
+        readonly Dictionary<string, Action> packRefresh = new Dictionary<string, Action>();     // a color's pack card: its switch shown again
 
         void ShowCostumes(string code)
         {
@@ -862,8 +864,15 @@ namespace ExMoreStuff
                     Switch = on =>
                     {
                         ItemCard card;
+                        Action refresh;
                         if (colorCards.TryGetValue(i.Key, out card)) card.Use.Checked = on;   // its card's switch does the rest
-                        else { wanted[i.Key] = on; FighterTile tile; if (tiles.TryGetValue(code, out tile)) Count(tile, code); UpdateStatus(); }
+                        else
+                        {
+                            wanted[i.Key] = on;
+                            if (packRefresh.TryGetValue(i.Key, out refresh)) refresh();   // its pack's card: on while any of its colors is
+                            FighterTile tile; if (tiles.TryGetValue(code, out tile)) Count(tile, code);
+                            UpdateStatus();
+                        }
                     },
                 }).ToList();
                 grid.PlaysAs = n => { int s = Swap(wantedSwaps, CostumeSwaps.Key(code, n)); return s == 0 ? null : CostumeLabel(code, s); };
@@ -872,16 +881,20 @@ namespace ExMoreStuff
                 cards.Add(grid);
             }
             // the extra colors (color packs) under the game's costumes, by the costume they're for ("Original: extra colors"),
-            // a card each with its picture, each switched on and off by itself (user 2026-10-17: "it should show them under the
-            // originals and i can disable any number of that packs colors")
+            // a card per pack: its colors of that costume under one name (a zip each; user 2026-10-18: "this is supposed to be
+            // one card"); each color is still switched by itself in the strip above (user 2026-10-17: "i can disable any number
+            // of that packs colors"), the card's switch all of them
             colorCards.Clear();
+            packRefresh.Clear();
             foreach (var costume in AllItems().Where(i => i.IsColor && i.Fighter == code).GroupBy(i => i.Slot).OrderBy(g => g.Key))
             {
                 cards.Add(new Heading(CostumeLabel(code, costume.Key) + ": extra colors", width));
-                foreach (Item color in costume.OrderBy(i => i.Color))
+                foreach (var pack in costume.GroupBy(i => CardName(i, installed.FirstOrDefault(r => r.Item.Key == i.Key) ?? RemovedRecord(i.Key)))
+                                            .Select(g => g.OrderBy(i => i.Color).ToList()).OrderBy(g => g[0].Color))
                 {
-                    Control card = Card(color);
-                    if (card is ItemCard) colorCards[color.Key] = (ItemCard)card;
+                    if (pack.Count > 1) { cards.Add(PackCard(pack)); continue; }
+                    Control card = Card(pack[0]);
+                    if (card is ItemCard) colorCards[pack[0].Key] = (ItemCard)card;
                     cards.Add(card);
                 }
             }
@@ -974,7 +987,7 @@ namespace ExMoreStuff
             {
                 docked.Add(new Heading("Docked for edits", width));
                 docked.Add(ShadowLabel.Note("Out of the game while you get them ready to share; the edits go into the files themselves. Uploading Guide (below) says how.", width));
-                foreach (Installed file in dockedFiles) docked.Add(DockedCard(file, width));
+                foreach (var zip in dockedFiles.GroupBy(f => f.Package, StringComparer.OrdinalIgnoreCase)) docked.Add(DockedCard(zip.ToList(), width));   // a color pack's colors: one card
                 docked.Add(new Heading("Tools", width));
             }
             // Performance warnings (Weight): where the size warnings start. Only warnings: nothing is ever stopped by them (user).
@@ -1140,6 +1153,139 @@ namespace ExMoreStuff
                     if (!t.IsFaulted && !card.IsDisposed) card.Incomplete.Show(t.Result);
                 }, TaskScheduler.FromCurrentSynchronizationContext());
             return card;
+        }
+
+        // A color pack's colors of one costume as one card (user 2026-10-18): its name, how many colors, its switch (all its
+        // colors on or off; on while any is), Rename and Delete for all of them, and its colors' pictures side by side.
+        Control PackCard(List<Item> colors)
+        {
+            Item first = colors[0];
+            Func<Item, Installed> recordOf = i => installed.FirstOrDefault(r => r.Item.Key == i.Key);
+            Installed own = recordOf(first) ?? RemovedRecord(first.Key);
+            string by = string.Join("  ·  ", new[] { first.Author, (first.Id ?? "").StartsWith("gamebanana:") ? null : first.Version }.Where(t => !string.IsNullOrEmpty(t)));
+            if ((first.Id ?? "").StartsWith("gamebanana:")) by = "GameBanana" + (by.Length > 0 ? "  ·  " + by : "");
+            else if (own != null ? own.Source == "file" : first.Personal) by = "Your own package" + (by.Length > 0 ? "  ·  " + by : "");
+            var card = new ItemCard
+            {
+                Title = CardName(first, own),
+                Detail = by,
+                Note = colors.Count + " colors (" + colors[0].Color + "-" + colors[colors.Count - 1].Color + "). Others without one see color 1",
+                Margin = new Padding(6),
+            };
+            bool showing = false;
+            Action shown = () => { showing = true; card.Use.Checked = colors.Any(Wanted); showing = false; card.Invalidate(); };
+            shown();
+            foreach (Item c in colors) packRefresh[c.Key] = shown;
+            card.Use.CheckedChanged += (s, e) =>
+            {
+                if (showing) return;
+                foreach (Item c in colors) wanted[c.Key] = card.Use.Checked;
+                card.Invalidate();
+                if (costumeGrid != null && !costumeGrid.IsDisposed) costumeGrid.Invalidate();   // their switches in the colors strip
+                FighterTile tile;
+                if (tiles.TryGetValue(first.Fighter, out tile)) Count(tile, first.Fighter);
+                UpdateStatus();
+            };
+            if (colors.Any(c => recordOf(c) != null))
+            {
+                card.ShowLink("Rename");
+                card.Link.LinkClicked += (s, e) => RenamePack(colors, card);
+            }
+            if (colors.Select(c => recordOf(c) ?? RemovedRecord(c.Key)).Any(r => r != null && r.Source == "file"))
+            {
+                card.ShowTrash();
+                card.Trash.Click += async (s, e) => await DeletePack(colors);
+                tips.SetToolTip(card.Trash, "Delete it (you choose whether its zips go too)");
+            }
+            tips.SetToolTip(card, string.IsNullOrEmpty(first.Description) ? first.Title : first.Description);
+            var ignored = PackPicture(colors, card);
+            return card;
+        }
+
+        // a pack card's picture: its colors' pictures side by side (the middle of each, up to 6), once they're read
+        async Task PackPicture(List<Item> colors, ItemCard card)
+        {
+            var found = new List<Image>();
+            foreach (Item c in colors)
+            {
+                if (found.Count == 6) break;
+                Image image = await ReadPicture(c);
+                if (image != null) found.Add(image);
+            }
+            if (found.Count == 0 || card.IsDisposed) return;
+            const int height = 384, slot = 128;
+            var strip = new Bitmap(slot * found.Count, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(strip))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                for (int i = 0; i < found.Count; i++)
+                {
+                    Image p = found[i];
+                    int w = p.Width * height / Math.Max(1, p.Height);   // its width at the strip's height
+                    g.SetClip(new Rectangle(i * slot, 0, slot, height));
+                    g.DrawImage(p, new Rectangle(i * slot + (slot - w) / 2, 0, w, height));
+                }
+            }
+            card.Picture = strip;
+            card.Invalidate();
+            if (costumeGrid != null && !costumeGrid.IsDisposed) costumeGrid.Invalidate();
+        }
+
+        // a pack's name for all its colors
+        void RenamePack(List<Item> colors, ItemCard card)
+        {
+            var records = colors.Select(c => installed.FirstOrDefault(r => r.Item.Key == c.Key)).Where(r => r != null).ToList();
+            if (records.Count == 0) return;
+            Item first = records[0].Item;
+            string current;
+            if (!wantedNames.TryGetValue(first.Key, out current)) current = records[0].Shown ?? first.Name ?? "";
+            using (var dialog = new NameDialog(Fighters.Name(first.Fighter) + " " + CostumeGrid.CostumeName(first.Slot).ToLowerInvariant() + " colors", current))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                string name = Installer.CleanName(dialog.Value);
+                foreach (Installed r in records)
+                    if (r.Shown != null && name == r.Shown) wantedNames.Remove(r.Item.Key);
+                    else wantedNames[r.Item.Key] = name;
+            }
+            card.Title = CardName(first, records[0]);
+            card.Invalidate();
+            UpdateStatus();
+        }
+
+        // a pack deleted for good: asked once, for all its colors
+        async Task DeletePack(List<Item> colors)
+        {
+            var records = colors.Select(c => installed.FirstOrDefault(r => r.Item.Key == c.Key) ?? RemovedRecord(c.Key)).Where(r => r != null && r.Source == "file").ToList();
+            if (records.Count == 0 || !GameClosed()) return;
+            string title = CardName(records[0].Item, records[0]) + " (" + records.Count + " colors)";
+            var choice = PackagesPanel.AskDelete(this, game, records[0], title);
+            if (choice == DeleteDialog.Choice.Cancel) return;
+            // a zip goes when only this pack's colors use it (one zip for the pack, or a zip each from before 0.92)
+            var keys = new HashSet<string>(records.Select(r => r.Item.Key));
+            var others = installed.Concat(removed).Where(r => !keys.Contains(r.Item.Key) && !string.IsNullOrEmpty(r.Package)).Select(r => Path.GetFullPath(r.Package)).ToList();
+            var recycle = records.Select((r, i) => !string.IsNullOrEmpty(r.Package) && File.Exists(r.Package) && !r.Theirs &&
+                                                   !others.Contains(Path.GetFullPath(r.Package), StringComparer.OrdinalIgnoreCase) &&
+                                                   records.FindIndex(x => string.Equals(x.Package, r.Package, StringComparison.OrdinalIgnoreCase)) == i).ToList();
+            string g = game;
+            var notes = new List<string>();
+            PageWorking(true);
+            try
+            {
+                await Task.Run(() =>
+                {
+                    for (int i = 0; i < records.Count; i++)
+                    {
+                        string note = PackagesPanel.PurgeForGood(g, records[i]);
+                        if (note != null) notes.Add(note);
+                        if (recycle[i]) PackagesPanel.RecycleZip(records[i].Package);
+                    }
+                });
+            }
+            catch (Exception ex) { MessageBox.Show(this, "It wasn't all deleted: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            finally { PageWorking(false); }
+            ReloadKeeping(records.Select(r => r.Item.Key).ToArray());
+            UpdateStatus(title + " is deleted");
+            if (notes.Count > 0) MessageBox.Show(this, string.Join("\n\n", notes.Distinct()), Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         static string Short(PerfTest.Result r)
@@ -1382,6 +1528,15 @@ namespace ExMoreStuff
 
         async Task LoadPicture(Item item, ItemCard card)
         {
+            Image image = await ReadPicture(item);
+            card.Picture = image;
+            card.Invalidate();
+            if (item.IsColor && costumeGrid != null && !costumeGrid.IsDisposed) costumeGrid.Invalidate();   // the colors strip shows it too
+        }
+
+        // an item's picture: kept once read (pictures), from the catalog, its installed files or its zip; null when none
+        async Task<Image> ReadPicture(Item item)
+        {
             Image image;
             if (!pictures.TryGetValue(item.Key, out image))
             {
@@ -1409,9 +1564,7 @@ namespace ExMoreStuff
                 }
                 catch (Exception) { }
             }
-            card.Picture = image;
-            card.Invalidate();
-            if (item.IsColor && costumeGrid != null && !costumeGrid.IsDisposed) costumeGrid.Invalidate();   // the colors strip shows it too
+            return image;
         }
 
         // Whenever nothing is running, the status line also says the program can simply be closed.
@@ -1696,7 +1849,8 @@ namespace ExMoreStuff
                 string g = game;
                 string twin = await Task.Run(() => Installer.AddedBefore(g, path));
                 if (twin != null) { already.Add(file + "  (" + twin + ")"); continue; }
-                Item item = Installer.Package(path);
+                List<Item> items = Installer.Packages(path);   // a color pack's zip: each of its colors (user 2026-10-18)
+                Item item = items.FirstOrDefault();
                 if (item == null)
                 {
                     // built and put in by Browse Mods' installer, staying on this tab (user 2026-10-14: it switched to Browse
@@ -1724,11 +1878,13 @@ namespace ExMoreStuff
                     if (item.IsColor && item.Slot >= Catalog.FirstCustomCostume && !File.Exists(Path.Combine(Game.FolderFor(game, item), costume + ".obj.emo")) &&
                         MessageBox.Show(this, file + ": " + Fighters.Name(item.Fighter) + " " + item.Slot.ToString("D2") + " isn't in the game, so this color won't show until it is. Add it anyway?",
                             Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) { notAdded.Add(file + ": skipped"); continue; }
-                    if (installed.Concat(removed).Any(r => r.Item.Key == item.Key) && MessageBox.Show(this, file + ": " + Describe(item) + " is already installed. Replace it with this one?", Text,
-                            MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) { notAdded.Add(file + ": skipped"); continue; }
+                    Item there = items.FirstOrDefault(i => installed.Concat(removed).Any(r => r.Item.Key == i.Key));
+                    if (there != null && MessageBox.Show(this, file + ": " + Describe(there) + (items.Count > 1 ? " and others in it are" : " is") + " already installed. Replace " +
+                            (items.Count > 1 ? "them" : "it") + " with this one?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) { notAdded.Add(file + ": skipped"); continue; }
                     // a copy in Mods\, so the player's file may move; one picked from inside Mods\ is used as it is, and stays theirs
                     string kept = AppFolders.KeepPackage(path, item);
-                    Installer.InstallPackage(game, item, kept, "file", string.Equals(Path.GetFullPath(kept), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase));
+                    foreach (Item each in items)
+                        Installer.InstallPackage(game, each, kept, "file", string.Equals(Path.GetFullPath(kept), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase));
                     Installer.AdoptPackages(game);   // one picked from inside Mods\ goes to its folder there
                     Reload();
                     added.Add(file);
@@ -1790,18 +1946,20 @@ namespace ExMoreStuff
 
         // A docked file's card (Advanced): Color pictures (a costume) on Costume creation, its code changed in its zip,
         // Remove takes it off the list (the file stays).
-        Control DockedCard(Installed file, int width)
+        Control DockedCard(List<Installed> files, int width)
         {
+            Installed file = files[0];
             Item item = file.Item;
+            bool pack = files.Count > 1;   // a color pack's zip, its colors
             var shots = item.IsStage ? PerfTest.PreviewPictures(file.Package) : new List<string>();
             var row = new DockedRow
             {
                 Size = new Size(width - 16, DockedRow.RowHeight + (shots.Count > 0 ? DockedRow.ShotsHeight : 0)),
                 Margin = new Padding(8, 4, 8, 4),
-                Title = Weight.Name(file),
-                Kind = item.IsStage ? "Stage" : item.IsColor ? "Color" : "Costume",
+                Title = pack ? Fighters.Name(item.Fighter) + " " + (file.Shown ?? item.Name) : Weight.Name(file),
+                Kind = item.IsStage ? "Stage" : pack ? "Colors" : item.IsColor ? "Color" : "Costume",
                 FilePath = file.Package,
-                CanMakePictures = item.IsCostume,
+                CanMakePictures = item.IsCostume || item.IsColor,   // a color pack's too (user 2026-10-18)
                 CanPreview = item.IsStage,
             };
             // a stage: Preview in game, and the last preview's pictures under the card (made small in the background;
@@ -1842,6 +2000,13 @@ namespace ExMoreStuff
             tips.SetToolTip(row.ShowFile, "Show it in its folder");
             row.Code.MaxLength = item.IsStage ? 3 : 2;
             row.Code.Text = item.IsStage ? item.Code : item.IsColor ? item.Color.ToString() : item.Slot.ToString();
+            if (pack)   // its colors' numbers: changed one at a time on Package codes once it's in the game
+            {
+                row.Code.MaxLength = 7;
+                row.Code.Text = files.Min(f => f.Item.Color) + "-" + files.Max(f => f.Item.Color);
+                row.Code.ReadOnly = true;
+                row.Change.Visible = false;
+            }
             row.ColorPictures.Click += (s, e) => { openTool = "creation"; creationPage.SetGame(game); ShowTab(advancedTab); };
             row.Change.Click += async (s, e) => await MoveDocked(file, row);
             row.Remove.Click += (s, e) =>

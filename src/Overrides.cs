@@ -45,6 +45,46 @@ namespace ExMoreStuff
             return null;
         }
 
+        // A stage's own code in EX More Stuff (user 2026-10-18): code_<CODE>.txt beside stage files under a game stage's code
+        // (STG_LBX.emz), so one upload is a plain replacement for players copying it in by hand and its own stage <CODE> in
+        // EX More Stuff, re-coded as it goes in (ModFile.BuildStage). Like override_<CODE>.txt, read from the file names.
+        static readonly Regex CodeMarker = new Regex(@"^code_([A-Za-z0-9]{3})\.txt$", RegexOptions.IgnoreCase);
+
+        public static bool IsCodeMarker(string path) { return CodeMarker.IsMatch(Name(path)); }
+
+        /// <summary>The stage code a mod's code_<CODE>.txt gives it (one, a custom code), or null.</summary>
+        public static string OwnCode(IEnumerable<string> paths)
+        {
+            var codes = paths.Select(p => CodeMarker.Match(Name(p))).Where(m => m.Success).Select(m => m.Groups[1].Value.ToUpperInvariant()).Distinct().ToList();
+            return codes.Count == 1 && Stages.IsCustomCode(codes[0]) ? codes[0] : null;
+        }
+
+        // A mod made for a newer EX More Stuff (user 2026-10-18: "a stage uploaded with this file will need old EXMS version
+        // users to require an update"): needs_exms_<version>.txt (needs_exms_0.93.txt) in it; older versions refuse it.
+        // Versions before 0.92 don't know this file.
+        static readonly Regex NeedsMarker = new Regex(@"^needs_exms_(\d+(?:\.\d+){1,3})\.txt$", RegexOptions.IgnoreCase);
+
+        /// <summary>Why this EX More Stuff can't install a mod that asks for a newer one ("needs EX More Stuff 0.93 or newer.
+        /// ..."), or null.</summary>
+        public static string TooNew(IEnumerable<string> paths)
+        {
+            Version needs = null;
+            foreach (string path in paths)
+            {
+                Match m = NeedsMarker.Match(Name(path));
+                Version v;
+                if (m.Success && Version.TryParse(m.Groups[1].Value, out v) && (needs == null || v > needs)) needs = v;
+            }
+            Version have = typeof(Overrides).Assembly.GetName().Version;
+            if (needs == null || new Version(have.Major, have.Minor) >= new Version(needs.Major, needs.Minor)) return null;
+            string named = needs.Major + "." + needs.Minor;
+            Version latest = Catalog.ProgramVersion;
+            return "needs EX More Stuff " + named + " or newer. " +
+                   (latest != null && new Version(latest.Major, latest.Minor) >= new Version(needs.Major, needs.Minor)
+                       ? "Update with \"Version " + latest + " is out\" at the top, then install it."
+                       : "Update EX More Stuff, then install it.");
+        }
+
         public static bool IsOverride(string source) { return source != null && source.StartsWith(Prefix, StringComparison.Ordinal); }
 
         public static List<Override> Load(string game)

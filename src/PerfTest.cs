@@ -413,6 +413,89 @@ namespace ExMoreStuff
             }
         }
 
+        // Color pack pictures (user 2026-10-18: "where do i go to generate the colors for this?"): a new color (30-99)
+        // can't be picked in the benchmark's fight, so for each its costume's files (as the game has them) play as P1's
+        // Original with the pack's texture as color 1, and color 1 is pictured as ColorPictures does. A run of the game
+        // each; Begin and Recover around each put the Original (and a swap of the player's) back.
+        public static SortedDictionary<int, Bitmap> PackPictures(string game, IList<Installed> packs, Action<string> say, bool fullSize = false)
+        {
+            string blocked = Blocked();
+            if (blocked != null) throw new InvalidOperationException(blocked);
+            var pictures = new SortedDictionary<int, Bitmap>();
+            string unpacked = AppFolders.DataFile("color_pack"), shot = AppFolders.DataFile("color_picture.png");
+            try
+            {
+                int done = 0;
+                foreach (Installed pack in packs)
+                {
+                    Item item = pack.Item;
+                    say("Color " + item.Color + (packs.Count > 1 ? " (" + ++done + " of " + packs.Count + ")" : "") + ": the game opens for a few seconds and closes by itself...");
+                    int id = Array.IndexOf(Fighters.Codes, item.Fighter), other = id == 0 ? 1 : 0;
+                    if (File.Exists(shot)) File.Delete(shot);
+                    Begin(game, null, item.Fighter);
+                    try
+                    {
+                        var files = CostumeSwaps.CostumeFiles(game, item.Fighter, item.Slot);
+                        if (!files.ContainsKey(".obj.emo")) throw new InvalidOperationException(Fighters.Name(item.Fighter) + "'s costume " + item.Slot + " isn't in the game");
+                        foreach (var part in UnpackColor(pack.Package, item, unpacked)) files["_01" + part.Key] = part.Value;
+                        CostumeSwaps.ReplaceWith(game, item.Fighter, 1, item.Slot, files);
+                        RunGame(game, FightLines(new[] { id, other, 0 }) + TrainingMode + "patch=26C88:00>00\r\n" +
+                                      "shot=" + shot + "\r\nshotat=60\r\nlayer=1\r\nquit=shots\r\n");
+                    }
+                    finally { Recover(game); }
+                    if (!File.Exists(shot)) throw new LoadFailed("the game saved no picture of color " + item.Color);
+                    using (var whole = new Bitmap(new MemoryStream(File.ReadAllBytes(shot)))) pictures[item.Color] = fullSize ? FullSize(whole) : Cutout(whole);
+                    File.Delete(shot);
+                }
+                return pictures;
+            }
+            catch (Exception)
+            {
+                foreach (Bitmap p in pictures.Values) p.Dispose();
+                throw;
+            }
+            finally { try { if (Directory.Exists(unpacked)) Directory.Delete(unpacked, true); } catch (Exception) { } }
+        }
+
+        // a color pack's texture and its material (<prefix>.col.emb, <prefix>.obj.emm when it has one) out of its zip into
+        // `folder` (emptied first), by what follows the prefix
+        static Dictionary<string, string> UnpackColor(string zipPath, Item item, string folder)
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, true);
+            Directory.CreateDirectory(folder);
+            var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(zipPath))
+                foreach (string part in new[] { ".col.emb", ".obj.emm" })
+                {
+                    var entry = zip.Entries.FirstOrDefault(e => e.Name.Equals(item.Prefix + part, StringComparison.OrdinalIgnoreCase));
+                    if (entry == null) continue;
+                    string path = Path.Combine(folder, entry.Name);
+                    using (Stream s = entry.Open())
+                    using (Stream to = File.Create(path)) s.CopyTo(to);
+                    files[part] = path;
+                }
+            if (!files.ContainsKey(".col.emb")) throw new InvalidDataException(item.Prefix + ".col.emb isn't in its zip");
+            return files;
+        }
+
+        /// <summary>Color pack pictures into their packages: each zip's <prefix>.png (its picture on the Costumes page and its
+        /// card) replaced, then the package into the game again (a docked file: not).</summary>
+        public static void PutPackPictures(string game, IList<Installed> packs, IDictionary<int, Bitmap> made)
+        {
+            foreach (Installed pack in packs)
+            {
+                Bitmap picture;
+                if (!made.TryGetValue(pack.Item.Color, out picture)) continue;
+                string entry = pack.Item.Prefix + ".png";
+                SafeFile.EditZip(pack.Package, zip =>   // on a copy, swapped in when done
+                {
+                    foreach (var old in zip.Entries.Where(e => string.Equals(e.Name, entry, StringComparison.OrdinalIgnoreCase)).ToList()) old.Delete();
+                    using (Stream s = zip.CreateEntry(entry).Open()) picture.Save(s, ImageFormat.Png);
+                });
+                if (pack.Source != Docked.Source) Installer.InstallPackage(game, pack.Item, pack.Package, "file");
+            }
+        }
+
         // Stage preview (user 2026-10-14: a docked stage seen in the game, "no characters, screen starts on the left, pans
         // to the right and closes"; its pictures shown on its card, each full size on a click): the docked stage in
         // Training Stage's place from its zip, the benchmark in training mode (both stand idle) with the helper's hide=1

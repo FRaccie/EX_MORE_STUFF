@@ -21,7 +21,7 @@ namespace ExMoreStuff
         public static readonly Color OnAccent = Color.FromArgb(26, 18, 6);
         public static readonly Color Update = Color.FromArgb(182, 108, 255);   // updates: the Browse Mods tab's dot and the Update buttons (user 2026-10-13)
         public static readonly Color Notify = Color.FromArgb(236, 84, 148);    // pink: Notifications with something to show (user 2026-10-14)
-        public static readonly Color Packs = Color.FromArgb(84, 160, 112);     // soft green: the Mod Packs button (user 2026-10-16)
+        public static readonly Color Packs = Color.FromArgb(57, 150, 90);      // green: the Mod Packs button (user 2026-10-16; 2026-10-18: "slightly darker", then "bump the saturation": 31% -> 45%, same lightness and hue)
         public static readonly Color Badge = Color.FromArgb(34, 160, 84);
         public static readonly Color OwnBadge = Color.FromArgb(48, 112, 214);   // the player's own mods (not GameBanana's)
         public static readonly Color GoodText = Color.FromArgb(120, 220, 150);

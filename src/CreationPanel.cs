@@ -13,7 +13,9 @@ namespace ExMoreStuff
     // making costumes. The first: color pictures. A costume of the player's own (a package with its zip) in each of its
     // 10 colors as the game draws it, standing idle, no stage or life bars (PerfTest.ColorPictures), put into its package
     // as <prefix>_<CC>.png for EMBER's character select, ready to share (Tom: "a render of the character with the costume
-    // for each color in chara select"). Each row shows the pictures its package has.
+    // for each color in chara select"). Each row shows the pictures its package has. Color packs too (user 2026-10-18:
+    // "where do i go to generate the colors for this?"): a row for a pack's colors of one costume (a zip each), each
+    // pictured as the game draws it (PerfTest.PackPictures) into its zip as <prefix>.png, its picture on the Costumes page.
     class CreationPanel : Clear
     {
         string game;
@@ -60,15 +62,19 @@ namespace ExMoreStuff
             if (Visible && Math.Abs(list.ClientSize.Width - filledWidth) > 4) Fill();
         }
 
-        // costumes docked for edits (Docked: not in the game) and the player's own costume packages whose zip is there, the
+        // costumes and color packs docked for edits (Docked: not in the game) and the player's own whose zip is there, the
         // newest first (user 2026-10-16: "the top list should be the newest ones you added or installed"): by when its zip was
-        // made (adding, installing or docking it makes it; color pictures go into the same zip and don't move it)
-        List<Installed> Costumes()
+        // made (adding, installing or docking it makes it; color pictures go into the same zip and don't move it). A pack's
+        // colors of one costume (a zip each) are one entry, its colors in order.
+        List<List<Installed>> Costumes()
         {
-            if (!Game.IsGameFolder(game)) return new List<Installed>();
-            return Docked.Load().Where(r => r.Item.IsCostume)
-                .Concat(Installer.Load(game).Where(r => r.Item.IsCostume && r.Source == "file" && !string.IsNullOrEmpty(r.Package) && File.Exists(r.Package)))
-                .OrderByDescending(r => Made(r.Package)).ThenBy(r => Fighters.Name(r.Item.Fighter)).ThenBy(r => r.Item.Slot).ToList();
+            if (!Game.IsGameFolder(game)) return new List<List<Installed>>();
+            Func<Installed, bool> wanted = r => r.Item.IsCostume || r.Item.IsColor;
+            return Docked.Load().Where(wanted)
+                .Concat(Installer.Load(game).Where(r => wanted(r) && r.Source == "file" && !string.IsNullOrEmpty(r.Package) && File.Exists(r.Package)))
+                .GroupBy(r => r.Item.IsColor ? "pack|" + (DockedZip(r) != null) + "|" + r.Item.Fighter + "|" + r.Item.Slot + "|" + PackName(r) : "one|" + r.Source + "|" + r.Package)
+                .Select(g => g.OrderBy(r => r.Item.Color).ToList())
+                .OrderByDescending(g => g.Max(r => Made(r.Package))).ThenBy(g => Fighters.Name(g[0].Item.Fighter)).ThenBy(g => g[0].Item.Slot).ToList();
         }
 
         static DateTime Made(string zip)
@@ -89,7 +95,7 @@ namespace ExMoreStuff
             {
                 new Heading("Costume creation", width),
                 ShadowLabel.Note("Tools for making costumes.\n\nColor pictures: EX More Stuff opens the game once per color, a few seconds each, and takes a picture of " +
-                                 "your costume standing idle, as the game draws it (no stage, no life bars). They go into the costume's package for rollback games' " +   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
+                                 "your costume or color pack standing idle, as the game draws it (no stage, no life bars). They go into the costume's package for rollback games' " +   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                                  "character select, ready to share. Steam needs to be running and the game closed.", width),
             };
             controls.Add(search);
@@ -112,14 +118,29 @@ namespace ExMoreStuff
             int width = Math.Max(400, list.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 16);
             string[] words = search.Text.Trim().ToLowerInvariant().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             var all = Costumes();
-            var costumes = all.Where(r => words.All(w => (Weight.Name(r) + " " + Fighters.Name(r.Item.Fighter) + " " + Path.GetFileName(r.Package)).ToLowerInvariant().Contains(w))).ToList();
+            var costumes = all.Where(g => words.All(w => g.Any(r => (Weight.Name(r) + " " + Fighters.Name(r.Item.Fighter) + " " + Path.GetFileName(r.Package)).ToLowerInvariant().Contains(w)))).ToList();
             var rows = new List<Control>();
             if (all.Count == 0) rows.Add(ShadowLabel.Note("No costume packages of your own yet: add one with Advanced > Add Mod From File (docked for edits, or " +
                                                           "into the game), or from Browse Mods.", width));
             else if (costumes.Count == 0) rows.Add(ShadowLabel.Note("No costumes match \"" + search.Text.Trim() + "\".", width));
-            foreach (Installed record in costumes)
+            foreach (List<Installed> group in costumes)
             {
-                var row = new CreationRow(Weight.Name(record) + (DockedZip(record) != null ? "   (docked)" : ""), Path.GetFileName(record.Package), Pictures(record), width) { Margin = new Padding(8, 4, 8, 4) };
+                Installed record = group[0];
+                if (record.Item.IsColor)
+                {
+                    List<Installed> packs = group;
+                    var pack = new CreationRow(PackName(record) + (DockedZip(record) != null ? "   (docked)" : ""),
+                                               (packs.Count == 1 ? "Color " : "Colors ") + string.Join(", ", packs.Select(p => p.Item.Color)) + " of " + Fighters.Name(record.Item.Fighter) + "'s " +
+                                               (record.Item.Slot < Catalog.FirstCustomCostume ? CostumeGrid.CostumeName(record.Item.Slot) : "slot " + record.Item.Slot),
+                                               packs.Select(p => PackPicture(p)).ToArray(), packs.Select(p => p.Item.Color).ToArray(), width, false) { Margin = new Padding(8, 4, 8, 4) };
+                    pack.Make.Click += async (s, e) => await MakePack(packs, pack.Colors);
+                    pack.FullSizeAsked += async color => await MakePackFullSize(packs.First(p => p.Item.Color == color));
+                    pack.Busy = working;
+                    rows.Add(pack);
+                    continue;
+                }
+                var row = new CreationRow(Weight.Name(record) + (DockedZip(record) != null ? "   (docked)" : ""), Path.GetFileName(record.Package), Pictures(record),
+                                          Enumerable.Range(1, PerfTest.ColorCount).ToArray(), width, true) { Margin = new Padding(8, 4, 8, 4) };
                 Installed r = record;
                 row.Make.Click += async (s, e) => await Make(r, row.Colors);
                 row.FullSizeAsked += async color => await MakeFullSize(r, color);
@@ -156,6 +177,20 @@ namespace ExMoreStuff
             }
             catch (Exception) { }
             return found;
+        }
+
+        // a color pack's name, without the one color's number Weight.Name gives (a row is the pack's colors)
+        static string PackName(Installed pack)
+        {
+            string name = pack.Shown ?? pack.Item.Name;
+            return string.IsNullOrEmpty(name) ? Fighters.Name(pack.Item.Fighter) + " colors" : name;
+        }
+
+        // a color pack's picture (<prefix>.png in its zip), or null
+        static Image PackPicture(Installed pack)
+        {
+            try { byte[] bytes = Installer.PackagePicture(pack.Package, pack.Item); return bytes != null ? Image.FromStream(new MemoryStream(bytes)) : null; }
+            catch (Exception) { return null; }
         }
 
         void Say(string text, bool problem = false)
@@ -198,6 +233,63 @@ namespace ExMoreStuff
             using (var preview = new PicturePreview(name + ": color pictures", made)) preview.ShowDialog(FindForm());
             // then its character's folder in Mods, its zip picked (user 2026-10-12): ready to share
             try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + record.Package + "\""); } catch (Exception) { }
+        }
+
+        // a pack's colors pictured, each into its zip (PerfTest.PackPictures); as Make does for a costume
+        async Task MakePack(List<Installed> packs, List<int> colors)
+        {
+            var picked = packs.Where(p => colors.Contains(p.Item.Color)).ToList();
+            if (picked.Count == 0) return;
+            string blocked = (Blocked != null ? Blocked() : null) ?? PerfTest.Blocked();
+            if (blocked != null) { Say("Can't make them now: " + blocked, true); return; }
+            string name = PackName(packs[0]), g = game, problem = null;
+            string which = picked.Count == 1 ? "color " + picked[0].Item.Color : "colors " + string.Join(", ", picked.Select(p => p.Item.Color));
+            if (MessageBox.Show(FindForm(), "EX More Stuff opens the game " + (picked.Count == 1 ? "once" : picked.Count + " times") + ", a few seconds each, and takes a picture of " +
+                    Fighters.Name(packs[0].Item.Fighter) + " standing in " + which + ". " + (picked.Count == 1 ? "It goes into the color's package and shows" : "They go into each color's package and show") + " on the Costumes page.", "EX More Stuff",
+                    MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
+            SortedDictionary<int, Bitmap> made = null;
+            SetWorking(true);
+            try
+            {
+                made = await Task.Run(() => PerfTest.PackPictures(g, picked, text => BeginInvoke((Action)(() => Say(text)))));
+                Say("Putting the pictures into " + name + "'s packages...");
+                await Task.Run(() => PerfTest.PutPackPictures(g, picked, made));
+            }
+            catch (Exception ex) { problem = ex.Message; }
+            finally { SetWorking(false); }
+            if (problem != null)
+            {
+                Say("The color pictures weren't made: " + problem, true);
+                if (made != null) foreach (Bitmap b in made.Values) b.Dispose();
+                return;
+            }
+            Say(name + ": " + (made.Count == 1 ? "color " + made.Keys.First() + "'s picture" : made.Count + " color pictures") + " made and put into " + (made.Count == 1 ? "its package" : "their packages"));
+            var changed = Changed;
+            if (changed != null) foreach (Installed p in picked) changed(p.Item.Key);
+            Fill(true);
+            using (var preview = new PicturePreview(name + ": color pictures", made)) preview.ShowDialog(FindForm());
+            try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + picked[0].Package + "\""); } catch (Exception) { }
+        }
+
+        // one of a pack's colors at the game's own size, beside its zip as MakeFullSize does
+        async Task MakePackFullSize(Installed pack)
+        {
+            string blocked = (Blocked != null ? Blocked() : null) ?? PerfTest.Blocked();
+            if (blocked != null) { Say("Can't make it now: " + blocked, true); return; }
+            string name = PackName(pack), g = game, problem = null;
+            int color = pack.Item.Color;
+            string file = Path.Combine(Path.GetDirectoryName(pack.Package), Path.GetFileNameWithoutExtension(pack.Package) + " - color " + color + ".png");
+            SetWorking(true);
+            try
+            {
+                var made = await Task.Run(() => PerfTest.PackPictures(g, new[] { pack }, text => BeginInvoke((Action)(() => Say(text))), true));
+                using (Bitmap picture = made[color]) picture.Save(file, System.Drawing.Imaging.ImageFormat.Png);
+            }
+            catch (Exception ex) { problem = ex.Message; }
+            finally { SetWorking(false); }
+            if (problem != null) { Say("The full-size picture wasn't made: " + problem, true); return; }
+            Say(name + ": color " + color + " at full size saved beside its zip (" + Path.GetFileName(file) + ")");
+            try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + file + "\""); } catch (Exception) { }
         }
 
         // One color at the game's own size (a thumbnail for the mod's page, say), beside the package's zip as
@@ -276,27 +368,32 @@ namespace ExMoreStuff
         public event Action<int> ForceAsked;      // ... or that color made a debug color (user 2026-10-16: "right click > force debug color")
         readonly string title, detail;
         readonly Image[] pictures;
+        readonly int[] numbers;   // each picture's color: 1-10, or a color pack's 30-99
         readonly bool[] picked;
+        readonly bool canForce;   // Force debug color in its menu (a costume's; not a pack's)
         bool busy;
         const int Thumb = 44;
 
-        public CreationRow(string title, string detail, Image[] pictures, int width)
+        public CreationRow(string title, string detail, Image[] pictures, int[] numbers, int width, bool canForce)
         {
             this.title = title;
             this.detail = detail;
             this.pictures = pictures;
+            this.numbers = numbers;
+            this.canForce = canForce;
             picked = Enumerable.Repeat(true, pictures.Length).ToArray();
             Make.Location = new Point(width - 16 - Make.Width - 14, 14);
             all.Size = new Size(Make.Width, 32);
             all.Location = new Point(Make.Left, Make.Bottom + 8);
             all.Click += (s, e) => { bool on = !picked.All(p => p); for (int i = 0; i < picked.Length; i++) picked[i] = on; Picked(); };
-            Size = new Size(width - 16, Math.Max(64 + Thumb * 3 / 2 + 14, all.Bottom + 14));
+            int bottom = pictures.Length == 0 ? 64 : Cell(pictures.Length - 1).Bottom;
+            Size = new Size(width - 16, Math.Max(bottom + 14, all.Bottom + 14));
             Controls.Add(Make);
             Controls.Add(all);
         }
 
-        /// <summary>The colors picked (1-10).</summary>
-        public List<int> Colors { get { return Enumerable.Range(1, picked.Length).Where(c => picked[c - 1]).ToList(); } }
+        /// <summary>The colors picked (their numbers).</summary>
+        public List<int> Colors { get { return Enumerable.Range(0, picked.Length).Where(i => picked[i]).Select(i => numbers[i]).ToList(); } }
 
         /// <summary>While pictures are being made (here or for another costume): nothing can be changed.</summary>
         public bool Busy { set { busy = value; Picked(); } }
@@ -308,7 +405,12 @@ namespace ExMoreStuff
             Invalidate();
         }
 
-        Rectangle Cell(int i) { return new Rectangle(14 + i * (Thumb + 6), 58, Thumb, Thumb * 3 / 2); }
+        // a picture's place: in a row left of the buttons, more rows under it when they don't fit (a pack of 14, say)
+        Rectangle Cell(int i)
+        {
+            int across = Math.Max(1, (Make.Left - 24) / (Thumb + 6));
+            return new Rectangle(14 + i % across * (Thumb + 6), 58 + i / across * (Thumb * 3 / 2 + 6), Thumb, Thumb * 3 / 2);
+        }
 
         int CellAt(Point p) { for (int i = 0; i < pictures.Length; i++) if (Cell(i).Contains(p)) return i; return -1; }
 
@@ -326,13 +428,16 @@ namespace ExMoreStuff
             if (e.Button == MouseButtons.Right)   // its menu: this color at full size
             {
                 ContextMenuStrip menu = DarkMenu.Create();
-                var full = new ToolStripMenuItem("Make a full-size picture of color " + (i + 1));
-                int color = i + 1;
+                int color = numbers[i];
+                var full = new ToolStripMenuItem("Make a full-size picture of color " + color);
                 full.Click += (s, a) => { var asked = FullSizeAsked; if (asked != null) asked(color); };
                 menu.Items.Add(full);
-                var force = new ToolStripMenuItem("Force debug color");
-                force.Click += (s, a) => { var asked = ForceAsked; if (asked != null) asked(color); };
-                menu.Items.Add(force);
+                if (canForce)
+                {
+                    var force = new ToolStripMenuItem("Force debug color");
+                    force.Click += (s, a) => { var asked = ForceAsked; if (asked != null) asked(color); };
+                    menu.Items.Add(force);
+                }
                 menu.Closed += (s, a) => CharacterPicker.BeginDispose(menu);
                 menu.Show(this, e.Location);
                 return;
@@ -360,7 +465,7 @@ namespace ExMoreStuff
                 using (var well = new SolidBrush(Theme.Well)) g.FillRectangle(well, cell);
                 if (pictures[i] != null) g.DrawImage(pictures[i], cell);
                 if (!picked[i]) using (var dim = new SolidBrush(Color.FromArgb(160, 0, 0, 0))) g.FillRectangle(dim, cell);   // left out
-                Theme.Draw(g, (i + 1).ToString(), Theme.Font(7.5f), picked[i] ? Theme.Text : Theme.Muted, new Rectangle(cell.X, cell.Bottom - 14, cell.Width - 3, 14), TextFormatFlags.Right | TextFormatFlags.Bottom);
+                Theme.Draw(g, numbers[i].ToString(), Theme.Font(7.5f), picked[i] ? Theme.Text : Theme.Muted, new Rectangle(cell.X, cell.Bottom - 14, cell.Width - 3, 14), TextFormatFlags.Right | TextFormatFlags.Bottom);
                 if (picked[i]) using (var frame = new Pen(Theme.Accent, 2f)) g.DrawRectangle(frame, cell.X - 1, cell.Y - 1, cell.Width + 1, cell.Height + 1);   // picked
             }
         }

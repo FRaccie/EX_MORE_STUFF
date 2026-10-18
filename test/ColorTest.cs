@@ -89,6 +89,47 @@ namespace ExMoreStuff
             Check(result.Problems.Count == 0 && skr.Item.IsColor && skr.Item.Slot == 10 && skr.Item.Color == 40 && skr.Item.Title.StartsWith("Slot 10 color 40"), "Sakura 10 color 40");
             Check(File.ReadAllBytes(Path.Combine(chara, "SKR", "SKR_10_40.png")).SequenceEqual(new byte[] { 9 }), "with its own picture");
 
+            Console.WriteLine("A pack: its colors of one costume in one zip, one install (user 2026-10-18)");
+            files = new List<KeyValuePair<string, byte[]>>();
+            foreach (int n in new[] { 30, 31, 32 })
+            {
+                files.Add(new KeyValuePair<string, byte[]>("p/KEN_02_" + n + ".col.emb", col));
+                files.Add(new KeyValuePair<string, byte[]>("p/KEN_02_" + n + ".obj.emm", emm));
+            }
+            result = ModFile.InstallFiles(game, files, "file:kenpack", "Ken Pack", "me", "", null, s => { });
+            var ken = Installer.Load(game).Where(r => r.Item.Fighter == "KEN").OrderBy(r => r.Item.Color).ToList();
+            Check(result.Problems.Count == 0 && result.Into.SequenceEqual(new[] { "Ken costume 2 colors 30, 31, 32" }), "one install: " + string.Join("; ", result.Problems.Concat(result.Into)));
+            Check(ken.Select(r => r.Item.Color).SequenceEqual(new[] { 30, 31, 32 }) && ken.Select(r => r.Package).Distinct().Count() == 1 &&
+                  Path.GetFileName(ken[0].Package) == "Ken Pack - KEN_02 colors.zip", "three colors, one zip: " + Path.GetFileName(ken[0].Package));
+            Check(Directory.GetFiles(Path.GetDirectoryName(ken[0].Package), "*.zip").Length == 1, "no zip a color in Mods");
+            Check(ken.All(r => r.Files.All(f => Path.GetFileName(f).StartsWith(r.Item.Prefix + "."))) && ken.All(r => r.Files.Count == 3),
+                  "each color holds only its own files (and its name)");
+            Check(Installer.Packages(ken[0].Package).Select(i => i.Color).SequenceEqual(new[] { 30, 31, 32 }), "its zip read as its three colors");
+            Check(!PackagesPanel.RecyclesZip(game, ken[0]), "deleting one color leaves the zip the others use");
+            result = ModFile.InstallFiles(game, files, "file:kenpack", "Ken Pack", "me", "", null, s => { });
+            ken = Installer.Load(game).Where(r => r.Item.Fighter == "KEN").ToList();
+            Check(result.Problems.Count == 0 && ken.Count == 3 && ken.Select(r => r.Package).Distinct().Count() == 1 &&
+                  Directory.GetFiles(Path.GetDirectoryName(ken[0].Package), "*.zip").Length == 1, "put in again: the same three colors, the same zip");
+
+            Console.WriteLine("A pack added before, a zip a color: merged into one");
+            var chun = new List<string>();
+            foreach (int n in new[] { 30, 31 })
+            {
+                var c = new Item { Id = "file:chun" + n, Type = "color", Fighter = "CHN", Slot = 1, Color = n, Code = "", Name = "Chun Pack", Author = "", Version = "" };
+                Directory.CreateDirectory(AppFolders.PackagesFor(c));
+                string z1 = Path.Combine(AppFolders.PackagesFor(c), "Chun Pack - " + c.Prefix + ".zip");
+                ModFile.Write(new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>(c.Prefix + ".col.emb", col), new KeyValuePair<string, byte[]>(c.Prefix + ".obj.emm", emm) }, z1);
+                Installer.InstallPackage(game, c, z1, "file");
+                chun.Add(z1);
+            }
+            var gone = new List<string>();
+            Check(Installer.MergeColorZips(game, p => { gone.Add(p); File.Delete(p); }) == 1, "one pack merged");
+            var chn = Installer.Load(game).Where(r => r.Item.Fighter == "CHN").ToList();
+            Check(chn.Count == 2 && chn.Select(r => r.Package).Distinct().Count() == 1 && Path.GetFileName(chn[0].Package) == "Chun Pack - CHN_01 colors.zip" &&
+                  Names(chn[0].Package).SequenceEqual(new[] { "CHN_01_30.col.emb", "CHN_01_30.obj.emm", "CHN_01_31.col.emb", "CHN_01_31.obj.emm" }), "both colors in one zip, the list pointing there");
+            Check(gone.Count == 2 && chun.All(z => !File.Exists(z)), "the old zips gone");
+            Check(Installer.MergeColorZips(game, p => File.Delete(p)) == 0 && ken.All(r => File.Exists(r.Package)), "nothing merged again; Ken's pack untouched");
+
             Console.WriteLine("Colors aren't costume slots");
             files = new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>("y/RYU_84_30.col.emb", col), new KeyValuePair<string, byte[]>("y/RYU_84_30.obj.emm", emm) };
             ModFile.InstallFiles(game, files, "file:y", "On 84", "me", "", null, s => { });
