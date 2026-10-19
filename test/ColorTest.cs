@@ -111,6 +111,16 @@ namespace ExMoreStuff
             Check(result.Problems.Count == 0 && ken.Count == 3 && ken.Select(r => r.Package).Distinct().Count() == 1 &&
                   Directory.GetFiles(Path.GetDirectoryName(ken[0].Package), "*.zip").Length == 1, "put in again: the same three colors, the same zip");
 
+            Console.WriteLine("Package codes: a pack moves together (one up: each lands on a number freed by then)");
+            foreach (Installed r in ken.OrderByDescending(r => r.Item.Color).ToList())
+                CodeChange.Apply(game, Installer.Load(game).First(x => x.Item.Key == r.Item.Key), null, r.Item.Color + 1);
+            ken = Installer.Load(game).Where(r => r.Item.Fighter == "KEN").OrderBy(r => r.Item.Color).ToList();
+            Check(ken.Select(r => r.Item.Color).SequenceEqual(new[] { 31, 32, 33 }) && ken.Select(r => r.Package).Distinct().Count() == 1, "now 31-33, one zip");
+            Check(Names(ken[0].Package).SequenceEqual(new[] { "KEN_02_31.col.emb", "KEN_02_31.obj.emm", "KEN_02_32.col.emb", "KEN_02_32.obj.emm", "KEN_02_33.col.emb", "KEN_02_33.obj.emm" }),
+                  "its zip renamed: " + string.Join(", ", Names(ken[0].Package)));
+            string kenFolder = Path.Combine(chara, "KEN");
+            Check(!File.Exists(Path.Combine(kenFolder, "KEN_02_30.col.emb")) && File.Exists(Path.Combine(kenFolder, "KEN_02_33.col.emb")), "in the game as 31-33");
+
             Console.WriteLine("A pack added before, a zip a color: merged into one");
             var chun = new List<string>();
             foreach (int n in new[] { 30, 31 })

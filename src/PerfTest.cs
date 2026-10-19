@@ -655,7 +655,12 @@ namespace ExMoreStuff
 
         /// <summary>P1 from the fighters' layer: the first run of columns from the left with anything in them (P2 stands
         /// apart further right; fighters too close: up to the middle), standing at the bottom of a transparent 256 x 384.</summary>
-        public static Bitmap Cutout(Bitmap layer)
+        public static Bitmap Cutout(Bitmap shot)
+        {
+            using (Bitmap layer = Solid(shot)) return CutoutOf(layer);
+        }
+
+        static Bitmap CutoutOf(Bitmap layer)
         {
             Rectangle crop = P1(layer);
             double scale = Math.Min(PictureWidth * 0.92 / crop.Width, PictureHeight * 0.94 / crop.Height);
@@ -675,7 +680,12 @@ namespace ExMoreStuff
 
         /// <summary>P1 at the game's own size (user 2026-10-12: "generate full size"): cut out as it is, with a little
         /// room around, transparent.</summary>
-        public static Bitmap FullSize(Bitmap layer)
+        public static Bitmap FullSize(Bitmap shot)
+        {
+            using (Bitmap layer = Solid(shot)) return FullSizeOf(layer);
+        }
+
+        static Bitmap FullSizeOf(Bitmap layer)
         {
             Rectangle crop = P1(layer);
             const int room = 12;
@@ -687,6 +697,51 @@ namespace ExMoreStuff
                 g.DrawImage(layer, new Rectangle(room, room, crop.Width, crop.Height), crop, GraphicsUnit.Pixel);
             }
             return picture;
+        }
+
+        // The fighters' layer with every drawn pixel solid. Some skins' textures leave their alpha empty where they're
+        // opaque (user 2026-10-18: Terry Bogard for Ken came out as floating pieces; three of its six textures have no
+        // alpha at all): the game ignores it there, but the layer keeps it, so the fighter would be cut away. Where the
+        // layer is see-through but its color isn't the background's (the color nearly all its see-through pixels share),
+        // the fighter was drawn: made solid. A layer without one background color is left as it is.
+        static Bitmap Solid(Bitmap layer)
+        {
+            int w = layer.Width, h = layer.Height;
+            // read as it is (drawing it would go through premultiplied color and lose the color under alpha 0)
+            var px = new int[w * h];
+            var source = layer.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            for (int y = 0; y < h; y++) System.Runtime.InteropServices.Marshal.Copy(source.Scan0 + y * source.Stride, px, y * w, w);
+            layer.UnlockBits(source);
+            var copy = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+            var data = copy.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            var counts = new Dictionary<int, int>();
+            int clear = 0;
+            foreach (int p in px)
+            {
+                if (((p >> 24) & 0xFF) != 0) continue;
+                clear++;
+                int rgb = p & 0xFFFFFF, n;
+                counts.TryGetValue(rgb, out n);
+                counts[rgb] = n + 1;
+            }
+            if (clear > 0)
+            {
+                var background = counts.OrderByDescending(c => c.Value).First();
+                if (background.Value >= clear * 0.6)
+                {
+                    int br = (background.Key >> 16) & 0xFF, bg = (background.Key >> 8) & 0xFF, bb = background.Key & 0xFF;
+                    for (int i = 0; i < px.Length; i++)
+                    {
+                        int p = px[i];
+                        if (((p >> 24) & 0xFF) > 16) continue;
+                        int r = (p >> 16) & 0xFF, gr = (p >> 8) & 0xFF, b = p & 0xFF;
+                        if (Math.Abs(r - br) + Math.Abs(gr - bg) + Math.Abs(b - bb) > 24) px[i] = unchecked((int)0xFF000000) | (p & 0xFFFFFF);
+                    }
+                }
+            }
+            for (int y = 0; y < h; y++) System.Runtime.InteropServices.Marshal.Copy(px, y * w, data.Scan0 + y * data.Stride, w);
+            copy.UnlockBits(data);
+            return copy;
         }
 
         // where P1 is in the fighters' layer: of the runs of columns with anything in them (a gap of empty columns apart),

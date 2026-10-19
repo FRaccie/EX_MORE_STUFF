@@ -62,7 +62,7 @@ namespace ExMoreStuff
             {
                 new Heading("Package codes", width),
                 ShadowLabel.Note("Your own costume, color and stage packages (added from a zip). Change a stage's code, a costume's slot or a new color's number (30-99) here: " +
-                     "its zip is updated too, ready to share. Stage codes are three capital letters or digits that aren't the game's " +
+                     "its zip is updated too, ready to share. A color pack moves together: type its first number. Stage codes are three capital letters or digits that aren't the game's " +
                      "(C01-C99 are the catalog's); costume slots are " + Catalog.FirstCustomCostume + "-" + Catalog.LastSlot + ". Share yours in " + Catalog.FirstCustomCostume + "-" +
                      Catalog.LastShared + "; " + Catalog.FirstPersonal + "-" + Catalog.LastPersonal + " and stage codes U12, 1U2, 12U ... are kept for your own mods; " +
                      (Catalog.LastPersonal + 1) + "-" + Catalog.LastSlot + " aren't free, nor are stage codes of one A or T with two digits (A12, 1A2, 12A, T12 ...).", width),
@@ -74,7 +74,12 @@ namespace ExMoreStuff
                     .Where(t => t.Item1.Source == "file").OrderBy(t => t.Item1.Item.IsStage).ThenBy(t => t.Item1.Item.Fighter).ThenBy(t => t.Item1.Item.Code).ThenBy(t => t.Item1.Item.Slot).ThenBy(t => t.Item1.Item.Color).ToList()
                 : new List<Tuple<Installed, bool>>();
             if (own.Count == 0) controls.Add(ShadowLabel.Note("No packages of your own yet: add one with Advanced > Add Mod From File.", width));
-            foreach (var t in own) controls.Add(Row(t.Item1, t.Item2, width));
+            // a color pack's colors (one zip): one row (user 2026-10-18: "could become very messy")
+            foreach (var group in own.GroupBy(t => t.Item1.Item.IsColor && !string.IsNullOrEmpty(t.Item1.Package) ? "pack|" + Path.GetFullPath(t.Item1.Package).ToLowerInvariant() : "one|" + t.Item1.Item.Key))
+            {
+                var members = group.ToList();
+                controls.Add(members.Count > 1 ? PackRow(members, width) : Row(members[0].Item1, members[0].Item2, width));
+            }
             list.SuspendLayout();
             foreach (Control c in list.Controls.Cast<Control>().ToList()) if (c != status) c.Dispose();   // the status line stays
             list.Controls.Clear();
@@ -211,6 +216,124 @@ namespace ExMoreStuff
             Say(row.Title + " is deleted" + (note != null ? ". " + note : ""), note != null);
         }
 
+        // A color pack's row: its name, Colors 30-43, Change moves them all (a new first number, the spacing kept), Delete
+        // takes them all
+        Control PackRow(List<Tuple<Installed, bool>> members, int width)
+        {
+            var records = members.Select(t => t.Item1).OrderBy(r => r.Item.Color).ToList();
+            Installed first = records[0];
+            int inGame = members.Count(t => t.Item2);
+            var row = new PackageRow
+            {
+                Size = new Size(width, 96),
+                Margin = new Padding(6, 4, 6, 4),
+                Title = first.Shown ?? first.Item.Name,
+                Detail = (inGame == records.Count ? "In the game" : inGame == 0 ? "Switched off" : inGame + " of " + records.Count + " in the game") + "   ·   " + first.Package,
+                Kind = "Colors",
+            };
+            Task.Run(() => Picture(first)).ContinueWith(t =>
+            {
+                if (t.IsFaulted || row.IsDisposed) return;
+                row.Picture = t.Result;
+                row.Invalidate();
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+            row.Code.MaxLength = 2;
+            row.Code.Text = records[0].Item.Color + "-" + records[records.Count - 1].Item.Color;
+            row.Change.Click += async (s, e) => await ChangePack(records, row);
+            row.Remove.Click += async (s, e) => await DeletePack(records, row);
+            return row;
+        }
+
+        // why a pack's colors can't move to start at `start`, or null: each keeps its distance from the first
+        string PackProblem(List<Installed> records, int start)
+        {
+            int shift = start - records[0].Item.Color;
+            if (shift == 0) return "that's its first number already";
+            if (start < Catalog.FirstCustomColor || records[records.Count - 1].Item.Color + shift > Catalog.LastColor)
+                return "its colors would go past " + Catalog.FirstCustomColor + "-" + Catalog.LastColor;
+            if (records.Any(r => r.Source != "file" || string.IsNullOrEmpty(r.Package) || !File.Exists(r.Package))) return "its zip isn't where it was";
+            var own = new HashSet<int>(records.Select(r => r.Item.Color));
+            Item one = records[0].Item;
+            var others = Installer.Load(game).Concat(Installer.Removed(game)).Where(r => r.Item.IsColor && r.Item.Fighter == one.Fighter && r.Item.Slot == one.Slot && !records.Any(x => x.Item.Key == r.Item.Key)).ToList();
+            string folder = Game.FolderFor(game, one);
+            foreach (Installed r in records)
+            {
+                int to = r.Item.Color + shift;
+                Installed taken = others.FirstOrDefault(o => o.Item.Color == to);
+                if (taken != null) return "color " + to + " is already used by " + taken.Item.TitleNamed(taken.Shown ?? taken.Item.Name);
+                if (!own.Contains(to) && File.Exists(Path.Combine(folder, one.Fighter + "_" + one.Slot.ToString("D2") + "_" + to.ToString("D2") + ".col.emb")))
+                    return "the game folder already has color " + to + " files that EX More Stuff didn't put there";
+            }
+            if (Game.IsRunning()) return "close the game first";
+            return null;
+        }
+
+        async Task ChangePack(List<Installed> records, PackageRow row)
+        {
+            string text = row.Code.Text.Trim();
+            if (text.Contains("-")) text = text.Substring(0, text.IndexOf('-'));
+            int start;
+            if (!int.TryParse(text, out start)) { Say("A color is a number", true); return; }
+            string blocked = Blocked != null ? Blocked() : null;
+            string problem = blocked ?? PackProblem(records, start);
+            if (problem != null) { Say("Can't change it: " + problem, true); return; }
+            int shift = start - records[0].Item.Color, last = records[records.Count - 1].Item.Color;
+            string from = "colors " + records[0].Item.Color + "-" + last, to = "colors " + start + "-" + (last + shift);
+            if (MessageBox.Show(FindForm(), "Move " + row.Title + " from " + from + " to " + to + "?\n\nIts zip is rewritten with the new numbers (" + Path.GetFileName(records[0].Package) + ")" +
+                    (Installer.Load(game).Any(r => records.Any(x => x.Item.Key == r.Item.Key)) ? ", and they're put in the game again under them." : "."),
+                    "EX More Stuff", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) return;
+            Busy(true);
+            Say("Moving " + row.Title + " to " + to + "...");
+            string g = game, note = null;
+            try
+            {
+                // moving up: the highest first, down: the lowest first, so each lands on a number that's free by then
+                var order = shift > 0 ? records.OrderByDescending(r => r.Item.Color).ToList() : records.OrderBy(r => r.Item.Color).ToList();
+                await Task.Run(() =>
+                {
+                    foreach (Installed r in order)
+                    {
+                        Installed now = Installer.Load(g).Concat(Installer.Removed(g)).First(x => x.Item.Key == r.Item.Key);
+                        note = CodeChange.Apply(g, now, null, r.Item.Color + shift) ?? note;
+                    }
+                });
+            }
+            catch (Exception ex) { Say("It didn't all move: " + ex.Message, true); Fill(); return; }
+            finally { Busy(false); }
+            var changed = Changed;
+            if (changed != null) changed();
+            Fill();
+            Say(row.Title + " is now " + to + (note != null ? ". " + note : ""), note != null);
+        }
+
+        async Task DeletePack(List<Installed> records, PackageRow row)
+        {
+            if (Game.IsRunning()) { Say("Can't delete it: close the game first", true); return; }
+            var choice = AskDelete(FindForm(), game, records[0], row.Title + " (" + records.Count + " colors)");
+            if (choice == DeleteDialog.Choice.Cancel) return;
+            // its zip goes when nothing outside the pack uses it
+            var keys = new HashSet<string>(records.Select(r => r.Item.Key));
+            bool shared = Installer.Load(game).Concat(Installer.Removed(game)).Any(r => !keys.Contains(r.Item.Key) && string.Equals(r.Package, records[0].Package, StringComparison.OrdinalIgnoreCase));
+            bool recycle = !shared && !records[0].Theirs && File.Exists(records[0].Package);
+            Busy(true);
+            string g = game;
+            var notes = new List<string>();
+            try
+            {
+                await Task.Run(() => { foreach (Installed r in records) { string n = PurgeForGood(g, r); if (n != null) notes.Add(n); } });
+                if (recycle) RecycleZip(records[0].Package);
+            }
+            catch (Exception ex) { Say("It wasn't all deleted: " + ex.Message, true); return; }
+            finally
+            {
+                Busy(false);
+                var changed = Changed;
+                if (changed != null) changed();
+                Fill();
+            }
+            Say(row.Title + " is deleted" + (notes.Count > 0 ? ". " + string.Join(" ", notes.Distinct()) : ""), notes.Count > 0);
+        }
+
         static Image Picture(Installed record)
         {
             if (string.IsNullOrEmpty(record.Package) || !File.Exists(record.Package)) return null;
@@ -314,7 +437,7 @@ namespace ExMoreStuff
             Theme.Draw(g, Title, Theme.Bold(11f), Theme.Text, new Rectangle(x, 14, right - x, 24), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             Theme.Draw(g, Kind, Theme.Font(9f), Theme.Accent, new Rectangle(x, 40, right - x, 18), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             Theme.Draw(g, Detail, Theme.Font(8.5f), Theme.Muted, new Rectangle(x, 60, right - x, 18), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.PathEllipsis);
-            Theme.Draw(g, Stage ? "Code" : Kind == "Color" ? "Color" : "Slot", Theme.Font(9f), Theme.Muted, new Rectangle(Code.Left - 60, Code.Top, 54, Code.Height), TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+            Theme.Draw(g, Stage ? "Code" : Kind == "Color" || Kind == "Colors" ? "Color" : "Slot", Theme.Font(9f), Theme.Muted, new Rectangle(Code.Left - 60, Code.Top, 54, Code.Height), TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
         }
     }
 }
