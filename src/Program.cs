@@ -19,8 +19,10 @@ namespace ExMoreStuff
         public const string DefaultCatalog = "https://raw.githubusercontent.com/oopswhats/EX_MORE_STUFF/main/catalog.json";
 
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
+            // a command (--dock, --free-codes ...): done without the window (Cli)
+            if (args.Length > 0 && args.Any(a => a.StartsWith("--"))) { Environment.Exit(Cli.Run(args)); return; }
             // One window at a time: starting it again brings the open one to the front.
             bool first;
             using (var single = new Mutex(true, @"Local\EXMoreStuff", out first))

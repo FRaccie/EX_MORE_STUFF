@@ -148,7 +148,7 @@ namespace ExMoreStuff
             if (item.IsColor) return new Regex("^" + Regex.Escape(item.Fighter + "_" + item.Slot.ToString("D2")) + @"_\d\d\.(col\.emb|obj\.emm|png)$", RegexOptions.IgnoreCase);
             return item.IsStage
                 ? new Regex("^(" + p + @"\.(emz|tex\.emz|png|jpg)|BGM_" + Regex.Escape(item.Code) + @"[23]?\.csb)$", RegexOptions.IgnoreCase)
-                : new Regex("^" + p + @"(\.(obj\.emo|shd\.emo|nml\.emb|bsr|csb|png)|_(E|J)\.csb|_(0[1-9]|10)\.(col\.emb|obj\.emm|png))$", RegexOptions.IgnoreCase);   // _E/_J.csb: its voice
+                : new Regex("^" + p + @"(\.(obj\.emo|shd\.emo|nml\.emb|bsr|csb|png)|_(E|J)\.csb|_(0[1-9]|10|[3-9]\d)\.(col\.emb|obj\.emm|png))$", RegexOptions.IgnoreCase);   // _E/_J.csb: its voice; 30-99: its extra colors
         }
 
         // Why a package can't be installed as `item`, or null.

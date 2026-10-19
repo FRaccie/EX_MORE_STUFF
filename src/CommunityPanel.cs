@@ -320,6 +320,13 @@ namespace ExMoreStuff
                    !HasStage(mod) && !SkinImport.Named(names).Any();
         }
 
+        // an effects mod: a fighter's effects files and no costume or stage (Skins > Other/Misc on GameBanana)
+        static bool IsEffects(GameBanana.Mod mod)
+        {
+            var contents = mod.Files.Where(f => f.Clean).SelectMany(f => f.Contents).ToList();
+            return contents.Any(Effects.IsFile) && !SkinImport.Named(contents).Any() && !HasStage(mod);
+        }
+
         static bool HasStage(GameBanana.Mod mod)
         {
             return mod.Files.Where(f => f.Clean).SelectMany(f => f.Contents).Any(c => StageFile(c) && c.Substring(c.LastIndexOf('/') + 1).StartsWith("STG_", StringComparison.OrdinalIgnoreCase));
@@ -333,8 +340,11 @@ namespace ExMoreStuff
             bool hide = Settings.HideNsfw;   // 18+ mods left out when the player hides them (the About tab)
             return mods.Where(m => (m.IsSkin || HasStage(m) || IsSong(m)) && !(hide && m.IsNsfw)).Select(m =>
             {
-                var e = new Entry { Mod = m, Stage = HasStage(m), Fighters = new HashSet<string>(SkinImport.Named(m.Files.SelectMany(f => f.Contents)).Select(c => c.Item1)) };
-                e.Words = (m.Name + " " + string.Join(" ", e.Fighters.Select(ExMoreStuff.Fighters.Name)) + (e.Stage ? " stage" : "") + (IsSong(m) ? " music song" : "")).ToLowerInvariant();
+                var contents = m.Files.SelectMany(f => f.Contents).ToList();
+                var effects = Effects.FightersIn(contents);   // a fighter's effects (user 2026-10-18)
+                var e = new Entry { Mod = m, Stage = HasStage(m), Fighters = new HashSet<string>(SkinImport.Named(contents).Select(c => c.Item1).Concat(effects)) };
+                e.Words = (m.Name + " " + string.Join(" ", e.Fighters.Select(ExMoreStuff.Fighters.Name)) + (e.Stage ? " stage" : "") + (IsSong(m) ? " music song" : "") +
+                           (effects.Count > 0 ? " effects" : "")).ToLowerInvariant();
                 return e;
             }).ToList();
         }
@@ -433,6 +443,16 @@ namespace ExMoreStuff
                 if (!result[key].Into.Contains(replaced)) result[key].Into.Add(replaced);
                 result[key].Versions.Add(o.Version ?? "");
             }
+            foreach (Effect fx in Effects.Load(game))   // effects from GameBanana
+            {
+                Match m = Regex.Match(fx.Id ?? "", @"^(gamebanana:[^:]+:)");
+                if (!m.Success) continue;
+                string key = m.Groups[1].Value;
+                if (!result.ContainsKey(key)) result[key] = new InGame();
+                string what = ExMoreStuff.Fighters.Name(fx.Fighter).ToUpperInvariant() + " EFFECTS";
+                if (!result[key].Into.Contains(what)) result[key].Into.Add(what);
+                result[key].Versions.Add(fx.Version ?? "");
+            }
             return result;
         }
 
@@ -446,7 +466,7 @@ namespace ExMoreStuff
         // a mod's files to install: checked ones with costume or stage files in, one per version (zip over rar and 7z)
         static List<GameBanana.ModFile> Wanted(GameBanana.Mod mod)
         {
-            return mod.Files.Where(f => f.Ready && (SkinImport.Named(f.Contents).Any() || f.Contents.Any(StageFile) ||
+            return mod.Files.Where(f => f.Ready && (SkinImport.Named(f.Contents).Any() || f.Contents.Any(StageFile) || f.Contents.Any(Effects.IsFile) ||
                                                    f.Contents.Any(c => SongFile.IsMatch(c.Substring(c.LastIndexOf('/') + 1)))))
                 .GroupBy(f => f.Base, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.OrderBy(f => f.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? 0 : 1).First()).ToList();
@@ -461,6 +481,7 @@ namespace ExMoreStuff
             if (replaces != null) return Stages.Name(replaces).ToUpperInvariant();   // an override: the stage it plays as
             var parts = SkinImport.Named(Wanted(mod).SelectMany(f => f.Contents)).Select(c => ExMoreStuff.Fighters.Name(c.Item1).ToUpperInvariant()).Distinct().ToList();
             if (HasStage(mod)) parts.Add("STAGE");
+            parts.AddRange(Effects.FightersIn(Wanted(mod).SelectMany(f => f.Contents)).Select(f => ExMoreStuff.Fighters.Name(f).ToUpperInvariant() + " EFFECTS"));
             return parts.Count > 0 ? string.Join(", ", parts) : null;
         }
 
@@ -595,7 +616,7 @@ namespace ExMoreStuff
                                                          "Its model may need them, so as a costume it would crash."
                                        : checking ? "GameBanana checks every new file for viruses before EX More Stuff offers it.\nIt usually takes a few minutes: press Refresh then." : null };
                 var mod = entry.Mod;
-                card.ShowSection(mod.Category);   // its GameBanana section's icon, top right
+                card.ShowSection(IsEffects(mod) ? "effects" : mod.Category);   // its GameBanana section's icon, top right (effects: their own, user 2026-10-18)
                 card.FileSize = StoragePanel.Megabytes(Wanted(mod).Sum(f => f.Size));   // what it downloads (user 2026-10-16)
                 GameBanana.Support support;
                 if (GameBanana.Supports.TryGetValue(mod.AuthorId, out support)) card.ShowSupport(support, mod.Author, tips);   // their Ko-fi / Patreon
@@ -781,10 +802,11 @@ namespace ExMoreStuff
                     var stageFiles = everything.Where(f => StageFile(f.Key) || Overrides.IsCodeMarker(f.Key)).ToList();   // code_<CODE>.txt: its own code
                     // a color pack (new colors 30-99 for a costume, no model: user 2026-10-17, the Dee Jay white pants upload):
                     // in as Add Mod From File puts colors in, each color its own
+                    var effectFiles = everything.Where(f => Effects.IsFile(f.Key)).ToList();   // a fighter's effects (user 2026-10-18)
                     var colorFiles = costumes.Count == 0 && stageFiles.Count == 0 && ModFile.FindColors(everything).Count > 0
                         ? everything.Where(f => ModFile.FindColors(new[] { f }).Count > 0 || Regex.IsMatch(Path.GetFileName(f.Key), @"^[A-Za-z0-9]{3}_\d\d_\d\d\.(obj\.emm|png)$", RegexOptions.IgnoreCase)).ToList()
                         : new List<KeyValuePair<string, byte[]>>();
-                    if (costumes.Count == 0 && stageFiles.Count == 0 && colorFiles.Count == 0) throw new InvalidDataException("it has no costume or stage files EX More Stuff can use");
+                    if (costumes.Count == 0 && stageFiles.Count == 0 && colorFiles.Count == 0 && effectFiles.Count == 0) throw new InvalidDataException("it has no costume or stage files EX More Stuff can use");
                     byte[] picture = null;
                     if (!string.IsNullOrEmpty(mod.Picture)) try { picture = await GameBanana.Bytes(mod.Picture); } catch (Exception) { }
                     var into = new List<string>();
@@ -838,6 +860,13 @@ namespace ExMoreStuff
                                                                                   code => SharedCodes.StageCode(mod, code)));
                         into.AddRange(result.Into);
                         problems.AddRange(result.Problems);
+                    }
+                    if (effectFiles.Count > 0)
+                    {
+                        Say("Putting " + mod.Name + " in...");
+                        var fx = await Task.Run(() => Effects.Install(g, effectFiles, "gamebanana:" + mod.Id, mod.Name, mod.Author, Signature(mod), picture));
+                        into.AddRange(fx.Select(f => ExMoreStuff.Fighters.Name(f) + "'s effects"));
+                        personal = true;   // only on this PC, online too
                     }
                     if (into.Count == 0) throw new InvalidOperationException(string.Join("; ", problems));
                     done = mod.Name + " is in: " + string.Join(", ", into) + (personal ? " (only you see " + (into.Count > 1 ? "those" : "it") + ")" : ", the same for everyone who has it") +
@@ -1381,7 +1410,7 @@ namespace ExMoreStuff
         static Image SectionIcon(string category)
         {
             string c = (category ?? "").ToLowerInvariant();
-            string name = c == "skins" ? "skins" : c == "stages" ? "stages" : c.Contains("music") || c.Contains("sound") || c.Contains("audio") ? "music" : null;
+            string name = c == "skins" ? "skins" : c == "stages" ? "stages" : c == "effects" ? "effects" : c.Contains("music") || c.Contains("sound") || c.Contains("audio") ? "music" : null;
             if (name == null) return null;
             Image icon;
             if (!sectionIcons.TryGetValue(name, out icon))

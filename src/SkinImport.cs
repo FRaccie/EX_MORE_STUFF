@@ -55,6 +55,9 @@ namespace ExMoreStuff
             public int Number;                                       // the game's costume it replaces (1-7), or its own code
             public readonly Dictionary<string, byte[]> Parts = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);   // by ending: ".obj.emo" ...
             public readonly Color[] Colors = new Color[10];          // colors 1-10; null: the game's
+            // its colors past 10 (user 2026-10-19: Tom's 20-color costume lost 11-20): the game and Ember know colors 1-10 and
+            // 30-99, so they're its extra colors from 30, in order (30-99 keep their number), in the same package
+            public readonly SortedDictionary<int, Color> Extra = new SortedDictionary<int, Color>();
             public readonly Dictionary<string, byte[]> Pictures = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);   // "" or "_01".."_10": its own pictures
             public readonly Dictionary<string, byte[]> Voices = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);     // "_E", "_J": the voice it came with
             public int Versions;                                     // versions that became colors
@@ -66,6 +69,7 @@ namespace ExMoreStuff
                 {
                     int own = Colors.Count(c => c != null);
                     return Fighters.Name(Fighter) + (Parts.ContainsKey(".obj.emo") ? ", new model" : "") + (own > 0 ? ", " + own + " color" + (own > 1 ? "s" : "") + " of its own" : "") +
+                           (Extra.Count > 0 ? ", " + Extra.Count + " extra color" + (Extra.Count > 1 ? "s" : "") + " (" + Extra.Keys.First() + "-" + Extra.Keys.Last() + ")" : "") +
                            (Voices.Count > 0 ? ", its own voice" : "");
                 }
             }
@@ -107,13 +111,31 @@ namespace ExMoreStuff
                 }
                 else
                     for (int i = 0; i < own.Count && i < 10; i++) c.Colors[i] = own[i];
+                // colors past 10: several versions' 11th on, and color files numbered 11-99; 11-29 become 30 up
+                var past = new List<Tuple<int, Color>>();
+                if (colored.Count > 1) foreach (Color x in own.Skip(10)) past.Add(Tuple.Create(0, x));
+                foreach (var v in versions)
+                    foreach (var f in v.Where(f => f.Ending == ".col.emb" && f.Color > 10 && f.Color <= Catalog.LastColor).OrderBy(f => f.Color))
+                        past.Add(Tuple.Create(f.Color, new Color { Col = f.Value, From = 1, Emm = emm(f.Color, v.Where(e => e.Ending == ".obj.emm" && e.Color == f.Color).Select(e => e.Value).FirstOrDefault()) }));
+                var renumbered = new Dictionary<int, int>();   // a color file's number -> its extra color's
+                foreach (var x in past.Where(x => x.Item1 >= Catalog.FirstCustomColor)) if (!c.Extra.ContainsKey(x.Item1)) { c.Extra[x.Item1] = x.Item2; renumbered[x.Item1] = x.Item1; }
+                int next = Catalog.FirstCustomColor;
+                foreach (var x in past.Where(x => x.Item1 < Catalog.FirstCustomColor))
+                {
+                    while (c.Extra.ContainsKey(next)) next++;
+                    if (next > Catalog.LastColor) break;
+                    c.Extra[next] = x.Item2;
+                    if (x.Item1 > 0 && !renumbered.ContainsKey(x.Item1)) renumbered[x.Item1] = next;
+                }
                 c.Versions = Math.Max(1, colored.Count);
                 c.ModelsDiffer = models.Skip(1).Any(m => !m.SequenceEqual(models[0]));
                 // its own pictures, for a costume in a code of its own (they show its colors in Ember's menus)
                 if (c.OwnCode)
                     foreach (var p in versions.SelectMany(v => v).Where(f => f.Ending == ".png"))
                     {
-                        string key = p.Color == 0 ? "" : "_" + p.Color.ToString("D2");
+                        int number = p.Color;
+                        if (number > 10 && !renumbered.TryGetValue(number, out number)) continue;   // a color past 10: its extra color's
+                        string key = number == 0 ? "" : "_" + number.ToString("D2");
                         if (!c.Pictures.ContainsKey(key)) c.Pictures[key] = p.Value;
                     }
                 // a costume needs a model or at least one color of its own
@@ -259,14 +281,21 @@ namespace ExMoreStuff
                 if (costume.Pictures.ContainsKey(suffix) && !madePictures.Contains(suffix)) continue;
                 package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".png", ColorVariants.PatternPicture(pattern)));
             }
+            // its colors past 10, as extra colors 30 up in the same package (Ember lists 30-99 for a costume)
+            foreach (var x in costume.Extra)
+            {
+                string suffix = "_" + x.Key.ToString("D2");
+                package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".col.emb", x.Value.Col));
+                package.Add(new KeyValuePair<string, byte[]>(to + suffix + ".obj.emm", x.Value.Emm ?? (first != null ? first.Emm : null) ?? fromGame("_01.obj.emm", true)));
+            }
             // the costume's own picture: the mod page's (`picture`, a GameBanana install: "thumbnail = the mod page's
             // picture", user 2026-10-09), never one in the mod's files, which may be older (user 2026-10-12: Seth's card
             // showed a render from before its upload; 2026-10-13: "just use the game banana picture ... card image in the
             // file, its not needed"), even when the page's won't read or couldn't be had (an empty `picture`). Its colors'
             // always stay.
-            byte[] page = Pictures.Png(picture);
+            byte[] page = Pictures.Png(picture, Pictures.PackageSide);   // made smaller: a mod's poster can be huge (user 2026-10-18)
             foreach (var p in costume.Pictures.Where(p => !madePictures.Contains(p.Key) && !(p.Key == "" && picture != null)))
-                package.Add(new KeyValuePair<string, byte[]>(to + p.Key + ".png", p.Value));
+                package.Add(new KeyValuePair<string, byte[]>(to + p.Key + ".png", Pictures.Png(p.Value, Pictures.PackageSide) ?? p.Value));
             if (page != null) package.Add(new KeyValuePair<string, byte[]>(to + ".png", page));
             string temp = zipPath + ".tmp";
             Directory.CreateDirectory(Path.GetDirectoryName(zipPath));

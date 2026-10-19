@@ -274,7 +274,7 @@ namespace ExMoreStuff
             // the game's settings as they were, if the test changed them (written since it began)
             if (pending.Config != null && File.Exists(ConfigPath) && File.GetLastWriteTimeUtc(ConfigPath).Ticks > pending.Began)
                 attempt(() => File.WriteAllBytes(ConfigPath, Convert.FromBase64String(pending.Config)));
-            if (notes.Count == 0) File.Delete(PendingPath(game));
+            if (notes.Count == 0) { File.Delete(PendingPath(game)); try { File.Delete(PendingPath(game) + ".bak"); } catch (Exception) { } }   // its copy from before (SafeFile) too
             return notes.Count == 0 ? null : "The last performance test didn't put everything back: " + string.Join("; ", notes);
         }
 

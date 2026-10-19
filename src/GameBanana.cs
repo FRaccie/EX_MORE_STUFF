@@ -599,7 +599,7 @@ namespace ExMoreStuff
         }
         // the only kinds of file taken out of a mod: the game's costume and stage files (all data), pictures, and archives inside it.
         // Anything else in it (a program, a script) never reaches the disk, and nothing in a mod is ever run.
-        static readonly string[] Kept = { ".emo", ".emb", ".emm", ".bsr", ".csb", ".emz", ".png", ".jpg", ".jpeg", ".zip", ".rar", ".7z" };
+        static readonly string[] Kept = { ".emo", ".emb", ".emm", ".bsr", ".csb", ".emz", ".bvs", ".png", ".jpg", ".jpeg", ".zip", ".rar", ".7z" };   // .bvs: effects (Effects)
 
         static bool Keep(string name) { return Kept.Any(k => name.EndsWith(k, StringComparison.OrdinalIgnoreCase)); }
 

@@ -154,7 +154,7 @@ namespace ExMoreStuff
         }
 
         // a picture that won't read: it goes in without one
-        public static byte[] Png(byte[] picture) { return Pictures.Png(picture); }
+        public static byte[] Png(byte[] picture) { return Pictures.Png(picture, Pictures.PackageSide); }   // a mod's own picture: made smaller
 
         public static void Write(List<KeyValuePair<string, byte[]>> package, string zipPath)
         {
@@ -282,11 +282,12 @@ namespace ExMoreStuff
                 MusicSlot slot = MusicBank.TaggedSlot(NameOf(f.Key), out layer, out song);
                 return slot == null ? null : new { Slot = slot, Layer = layer, Song = song, Bank = f.Value };
             }).Where(m => m != null).GroupBy(m => m.Slot.File, StringComparer.OrdinalIgnoreCase).Select(g => g.OrderBy(m => m.Layer).First()).ToList();
-            if (costumes.Count == 0 && stages.Count == 0 && colors.Count == 0 && music.Count == 0)
-                throw new InvalidDataException("it has no costume, color, stage or music files EX More Stuff can use (menus, HUDs, announcers and other sounds aren't supported)");
+            var effects = files.Where(f => Effects.IsFile(f.Key)).ToList();   // a fighter's effects (RYX.vfx.emz ...: Effects)
+            if (costumes.Count == 0 && stages.Count == 0 && colors.Count == 0 && music.Count == 0 && effects.Count == 0)
+                throw new InvalidDataException("it has no costume, color, stage, music or effects files EX More Stuff can use (menus, HUDs, announcers and other sounds aren't supported)");
             // a skin that changes its fighter's moves too: its costumes don't go in (SkinImport.ChangesMoves)
             string moves = costumes.Count > 0 ? SkinImport.ChangesMoves(files.Select(f => f.Key)) : null;
-            if (moves != null && stages.Count == 0 && colors.Count == 0 && music.Count == 0)
+            if (moves != null && stages.Count == 0 && colors.Count == 0 && music.Count == 0 && effects.Count == 0)
                 throw new InvalidDataException(moves + ", for every costume (online that's a desync), and its model may need them: it can't go in as a costume");
             // its picture: the mod page's, else the first picture in it that isn't a costume's or stage's own
             if (picture == null)
@@ -442,6 +443,14 @@ namespace ExMoreStuff
                     result.Problems.Add(stage.Describe + ": " + ex.Message);
                     if (again == null) try { File.Delete(zip); } catch (Exception) { }
                 }
+            }
+            // a fighter's effects: their own entry, on right away (not docked: they go straight in)
+            if (effects.Count > 0)
+            {
+                if (dock != null) result.Problems.Add("its effects can't be docked: add it without docking for them");
+                else
+                    try { foreach (string fighter in Effects.Install(game, effects, id, name, author, version, picture)) result.Into.Add(Fighters.Name(fighter) + "'s effects"); }
+                    catch (Exception ex) { result.Problems.Add("its effects: " + ex.Message); }
             }
             return result;
         }

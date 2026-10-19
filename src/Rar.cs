@@ -592,13 +592,14 @@ namespace ExMoreStuff
 
             void WriteArea(int start, int end)
             {
-                if (end != start) WriteData(window, start, ((end - start) & WinMask));
+                // wrapped past the window's end: its two parts (user 2026-10-18: Cammy Nilin's rar, "Offset and length were
+                // out of bounds", copied the whole span from `start` instead)
                 if (end < start)
                 {
                     WriteData(window, start, WinSize - start);
                     WriteData(window, 0, end);
                 }
-                else if (end > start) { }
+                else if (end > start) WriteData(window, start, end - start);
             }
 
             void WriteData(byte[] data, int at, int size)

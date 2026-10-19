@@ -19,7 +19,11 @@ namespace ExMoreStuff
         }
 
         /// <summary>The picture as a PNG file, or null when it can't be read.</summary>
-        public static byte[] Png(byte[] bytes)
+        public static byte[] Png(byte[] bytes) { return Png(bytes, 0); }
+
+        /// <summary>A picture as PNG, made smaller when its long side is over `longest` (0: as it is): a mod's own picture
+        /// going into a package (user 2026-10-18: the Samus Aran mod's 6116x6514 poster made a 48 MB AGL_09.png).</summary>
+        public static byte[] Png(byte[] bytes, int longest)
         {
             if (bytes == null) return null;
             try
@@ -27,12 +31,30 @@ namespace ExMoreStuff
                 using (Image image = Read(bytes))
                 using (var png = new MemoryStream())
                 {
-                    image.Save(png, ImageFormat.Png);
+                    int side = Math.Max(image.Width, image.Height);
+                    if (longest > 0 && side > longest)
+                    {
+                        int w = Math.Max(1, image.Width * longest / side), h = Math.Max(1, image.Height * longest / side);
+                        using (var small = new Bitmap(w, h, PixelFormat.Format32bppArgb))
+                        {
+                            using (Graphics g = Graphics.FromImage(small))
+                            {
+                                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                                g.DrawImage(image, 0, 0, w, h);
+                            }
+                            small.Save(png, ImageFormat.Png);
+                        }
+                    }
+                    else image.Save(png, ImageFormat.Png);
                     return png.ToArray();
                 }
             }
             catch (Exception) { return null; }
         }
+
+        /// <summary>The longest side of a mod's own picture in a package (its card shows it small).</summary>
+        public const int PackageSide = 512;
 
         // "RIFF", its size, "WEBP"
         static bool IsWebP(byte[] b)

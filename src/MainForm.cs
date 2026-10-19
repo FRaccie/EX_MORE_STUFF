@@ -30,6 +30,10 @@ namespace ExMoreStuff
         // Game costumes played as another on this PC ("RYU:2" -> the costume it plays as): as applied, and as chosen.
         Dictionary<string, int> swapped = new Dictionary<string, int>();
         readonly Dictionary<string, int> wantedSwaps = new Dictionary<string, int>();
+        // Each fighter's effects mod (Effects; fighter -> its id): as applied, and as chosen
+        Dictionary<string, string> effectsOn = new Dictionary<string, string>();
+        readonly Dictionary<string, string> wantedEffects = new Dictionary<string, string>();
+        readonly List<Action> effectCards = new List<Action>();   // the open fighter's effects cards: each one's switch shown again
         readonly Dictionary<string, Image> pictures = new Dictionary<string, Image>();
         readonly Dictionary<string, Image> stagePictures = new Dictionary<string, Image>();
         readonly Dictionary<string, Image> portraits = new Dictionary<string, Image>();
@@ -557,7 +561,12 @@ namespace ExMoreStuff
 
         bool Changed(Item item) { return Wanted(item) != IsInstalled(item.Key) || (Wanted(item) && HasUpdate(item)); }
 
-        int Pending() { return AllItems().Count(Changed) + ReplacementChanges().Count + SwapChanges().Count + Renames().Count; }
+        int Pending() { return AllItems().Count(Changed) + ReplacementChanges().Count + SwapChanges().Count + Renames().Count + EffectChanges().Count; }
+
+        static string EffectOf(Dictionary<string, string> map, string fighter) { string id; return map.TryGetValue(fighter, out id) ? id : null; }
+
+        // The fighters whose effects were changed and not applied yet.
+        List<string> EffectChanges() { return effectsOn.Keys.Union(wantedEffects.Keys).Where(f => EffectOf(effectsOn, f) != EffectOf(wantedEffects, f)).ToList(); }
 
         int Swap(Dictionary<string, int> map, string key) { int s; return map.TryGetValue(key, out s) ? s : 0; }
 
@@ -717,6 +726,8 @@ namespace ExMoreStuff
         // Reload after one package changed (deleted, moved): the other changes waiting for Apply stay waiting.
         void ReloadKeeping(params string[] gone)
         {
+            gone = gone ?? new string[0];   // ReloadKeeping(null): nothing gone
+            var keepEffects = wantedEffects.ToList();
             var keepWanted = wanted.Where(w => !gone.Contains(w.Key)).ToList();
             var keepNames = wantedNames.Where(w => !gone.Contains(w.Key)).ToList();
             var keepReplaced = wantedReplaced.ToList();
@@ -739,6 +750,10 @@ namespace ExMoreStuff
                 if (CostumeSwaps.ParseKey(s.Key, out f, out c) && (s.Value == 1 || installed.Concat(removed).Any(r => r.Item.IsCostume && r.Item.Fighter == f && r.Item.Slot == s.Value && usable(r))))
                     wantedSwaps[s.Key] = s.Value;
             }
+            // effects as chosen, the ones still there
+            var effectIds = new HashSet<string>(Game.IsGameFolder(game) ? Effects.Load(game).Select(e => e.Id) : Enumerable.Empty<string>());
+            wantedEffects.Clear();
+            foreach (var e in keepEffects) if (e.Value == null || effectIds.Contains(e.Value)) wantedEffects[e.Key] = e.Value;
             BuildRoster();
             if (openFighter != null) ShowCostumes(openFighter);
             BuildStages();
@@ -760,6 +775,9 @@ namespace ExMoreStuff
             swapped = Game.IsGameFolder(game) ? CostumeSwaps.Load(game).ToDictionary(s => s.Key, s => s.Source) : new Dictionary<string, int>();
             wantedSwaps.Clear();
             foreach (var s in swapped) wantedSwaps[s.Key] = s.Value;
+            effectsOn = Game.IsGameFolder(game) ? Effects.On(game) : new Dictionary<string, string>();
+            wantedEffects.Clear();
+            foreach (var e in effectsOn) wantedEffects[e.Key] = e.Value;
             BuildRoster();
             if (openFighter != null) ShowCostumes(openFighter);
             BuildStages();
@@ -897,6 +915,15 @@ namespace ExMoreStuff
                     if (card is ItemCard) colorCards[pack[0].Key] = (ItemCard)card;
                     cards.Add(card);
                 }
+            }
+            // the fighter's effects (user 2026-10-18): one on at a time, the same in every costume
+            effectCards.Clear();
+            var fx = Game.IsGameFolder(game) ? Effects.Load(game).Where(e => e.Fighter == code).OrderBy(e => e.Name).ToList() : new List<Effect>();
+            if (fx.Count > 0)
+            {
+                cards.Add(new Heading("Effects", width));
+                cards.Add(ShadowLabel.Note("Changes " + Fighters.Name(code) + "'s effects in every costume. Only you see them, online too. One at a time.", width));
+                foreach (Effect e in fx) cards.Add(EffectCard(e));
             }
             Fill(costumeCards, cards);
             rosterPage.Visible = false;
@@ -1288,6 +1315,55 @@ namespace ExMoreStuff
             if (notes.Count > 0) MessageBox.Show(this, string.Join("\n\n", notes.Distinct()), Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
+        // An effects mod's card: on means it's its fighter's effects (the others go off); Apply puts it in
+        Control EffectCard(Effect effect)
+        {
+            bool downloaded = (effect.Id ?? "").StartsWith("gamebanana:");
+            string by = string.Join("  ·  ", new[] { downloaded ? "GameBanana" : "Your own package", effect.Author }.Where(t => !string.IsNullOrEmpty(t)));
+            var card = new ItemCard { Title = effect.Name, Detail = by, Margin = new Padding(6) };
+            bool showing = false;
+            Action shown = () => { showing = true; card.Use.Checked = EffectOf(wantedEffects, effect.Fighter) == effect.Id; showing = false; card.Invalidate(); };
+            shown();
+            effectCards.Add(shown);
+            card.Use.CheckedChanged += (s, e) =>
+            {
+                if (showing) return;
+                if (card.Use.Checked) wantedEffects[effect.Fighter] = effect.Id;
+                else if (EffectOf(wantedEffects, effect.Fighter) == effect.Id) wantedEffects[effect.Fighter] = null;
+                foreach (Action a in effectCards) a();
+                UpdateStatus();
+            };
+            card.ShowTrash();
+            card.Trash.Click += async (s, e) => await DeleteEffect(effect);
+            tips.SetToolTip(card.Trash, "Delete it");
+            Task.Run(() => Effects.Picture(effect)).ContinueWith(t =>
+            {
+                if (t.IsFaulted || t.Result == null || card.IsDisposed) return;
+                card.Picture = Pictures.Read(t.Result);
+                card.Invalidate();
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+            return card;
+        }
+
+        async Task DeleteEffect(Effect effect)
+        {
+            if (!GameClosed()) return;
+            bool downloaded = (effect.Id ?? "").StartsWith("gamebanana:");
+            using (var dialog = new DeleteDialog(effect.Name, "It's taken out of the game and out of EX More Stuff.\n\n" +
+                                                (downloaded ? "You can download it again from Browse Mods." : "The original mod file you added is untouched.")))
+            {
+                dialog.ShowDialog(this);
+                if (dialog.Picked == DeleteDialog.Choice.Cancel) return;
+            }
+            string g = game;
+            PageWorking(true);
+            try { await Task.Run(() => Effects.Uninstall(g, effect.Id)); }
+            catch (Exception ex) { MessageBox.Show(this, "It wasn't all deleted: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            finally { PageWorking(false); }
+            ReloadKeeping(null);
+            UpdateStatus(effect.Name + " is deleted");
+        }
+
         static string Short(PerfTest.Result r)
         {
             if (r.Estimated) return r.FullSpeed ? "60+ fps, full speed" : "about " + r.Average.ToString("0") + " fps, may not keep full speed";   // from the game's speed only
@@ -1430,8 +1506,9 @@ namespace ExMoreStuff
         {
             var records = installed.Concat(removed).Where(r => (r.Item.Id ?? "").StartsWith(key, StringComparison.OrdinalIgnoreCase)).ToList();
             var overrides = Overrides.Load(game).Where(o => (o.Id ?? "").StartsWith(key, StringComparison.OrdinalIgnoreCase)).ToList();
+            var effects = Effects.Load(game).Where(e => (e.Id ?? "").StartsWith(key, StringComparison.OrdinalIgnoreCase)).ToList();
             bool song = SongMods.Load().Any(s => s.Key == key);
-            if ((records.Count == 0 && overrides.Count == 0 && !song) || !GameClosed()) return false;
+            if ((records.Count == 0 && overrides.Count == 0 && effects.Count == 0 && !song) || !GameClosed()) return false;
             string what = records.Count == 1 && overrides.Count == 0 && !song ? PackagesPanel.DeleteQuestion(game, records[0])
                         : song && records.Count == 0 && overrides.Count == 0
                             ? "It's taken out of EX More Stuff. A stage or fighter playing it now keeps it until you pick another song.\n\nYou can download it again from Browse Mods."
@@ -1455,6 +1532,7 @@ namespace ExMoreStuff
                     wanted.Remove(record.Item.Key);
                 }
                 foreach (Override o in overrides) await Task.Run(() => Overrides.Uninstall(g, o.Id));
+                foreach (Effect fx in effects) await Task.Run(() => Effects.Uninstall(g, fx.Id));
                 if (song) SongMods.Remove(key);
             }
             catch (Exception ex) { notes.Add("It wasn't all uninstalled: " + ex.Message); }
@@ -1737,6 +1815,14 @@ namespace ExMoreStuff
                 SetStatus("Replacing " + what + " with " + CostumeLabel(f, source) + "...");
                 try { await Task.Run(() => CostumeSwaps.Replace(folder, f, c, source)); }
                 catch (Exception ex) { problems.Add(what + ": " + ex.Message); }
+            }
+            // each fighter's effects as chosen (Effects): what's in goes, the chosen one goes in
+            foreach (string f in EffectChanges())
+            {
+                string id = EffectOf(wantedEffects, f);
+                SetStatus((id != null ? "Putting in " : "Taking out ") + Fighters.Name(f) + "'s effects...");
+                try { await Task.Run(() => Effects.Set(folder, f, id)); }
+                catch (Exception ex) { problems.Add(Fighters.Name(f) + "'s effects: " + ex.Message); }
             }
             foreach (var rename in Renames())
             {

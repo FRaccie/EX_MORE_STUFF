@@ -22,8 +22,11 @@ namespace ExMoreStuff
                 string here = AppDomain.CurrentDomain.BaseDirectory;
                 return root = Writable(here) ? here : AppData;
             }
-            set { root = value; }   // tests
+            set { root = value; }   // tests, and the command line's --data
         }
+
+        /// <summary>A file of an older EX More Stuff's folder isn't copied in (the command line's own --data folder).</summary>
+        public static bool NoMigrate;
 
         static string AppData { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), Program.Title); } }
 
@@ -61,6 +64,7 @@ namespace ExMoreStuff
         public static string DataFile(string name)
         {
             string here = Path.Combine(Root, name), old = Path.Combine(AppData, name);
+            if (NoMigrate) return here;
             try { if (!File.Exists(here) && File.Exists(old) && !Same(here, old)) { Directory.CreateDirectory(Root); File.Copy(old, here); } }
             catch (Exception) { }
             return here;
