@@ -81,19 +81,22 @@ namespace ExMoreStuff
         bool Stage { get { return Kind == "Stage"; } }
         public readonly TextBox Code = new TextBox { BackColor = Theme.Well, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle, Font = Theme.Bold(11f),
                                                      CharacterCasing = CharacterCasing.Upper, TextAlign = HorizontalAlignment.Center };
-        public readonly FlatButton Change = new FlatButton("Change"), Remove = new FlatButton("Remove"), ColorPictures = new FlatButton("Color pictures") { Visible = false },
-                                   Preview = new FlatButton("Preview in game") { Visible = false };
+        // (user 2026-10-21: "change "change" to "confirm" and "remove" to "remove docked file"", the unused stage code its own button)
+        public readonly FlatButton Change = new FlatButton("Confirm"), Remove = new FlatButton("Remove docked file"), ColorPictures = new FlatButton("Color pictures") { Visible = false },
+                                   Preview = new FlatButton("Preview in game") { Visible = false }, UnusedCode = new FlatButton("Get an unused stage code") { Visible = false };
         public readonly LinkLabel ShowFile = new LinkLabel { AutoSize = false, AutoEllipsis = true, BackColor = Color.Transparent, Font = Theme.Font(8.5f),
                                                          LinkColor = Theme.Muted, ActiveLinkColor = Theme.Text, LinkBehavior = LinkBehavior.HoverUnderline };
         // a stage's preview pictures (left, middle, right: PerfTest.StagePreview), under the card once there are some;
         // a click shows one full size (ShotClicked, its number)
         public readonly ShotThumb[] Thumbs = { new ShotThumb(), new ShotThumb(), new ShotThumb() };
         public event Action<int> ShotClicked;
-        public const int RowHeight = 96, ShotsHeight = 112, ThumbWidth = 176, ThumbHeight = 99;
+        // taller (user 2026-10-21: "you can make the dock thing bigger vertically"): its name, kind and file across the top,
+        // its buttons in a row along the bottom
+        public const int RowHeight = 140, ShotsHeight = 112, ThumbWidth = 176, ThumbHeight = 99;
 
         public DockedRow()
         {
-            Controls.AddRange(new Control[] { Code, Change, Remove, ColorPictures, Preview, ShowFile });
+            Controls.AddRange(new Control[] { Code, Change, Remove, ColorPictures, Preview, UnusedCode, ShowFile });
             for (int i = 0; i < Thumbs.Length; i++)
             {
                 int n = i;
@@ -111,9 +114,10 @@ namespace ExMoreStuff
         }
 
         // a costume: its Color pictures button shows; a stage: Preview in game
-        bool pictures, preview;
+        bool pictures, preview, unused;
         public bool CanMakePictures { set { pictures = value; ColorPictures.Visible = value; Arrange(); } }
         public bool CanPreview { set { preview = value; Preview.Visible = value; Arrange(); } }
+        public bool CanGetCode { set { unused = value; UnusedCode.Visible = value; Arrange(); } }   // a stage: Get an unused stage code
 
         /// <summary>The preview's pictures (made small for the card), shown under it; the card is as tall as they need
         /// (the caller sizes it: RowHeight, plus ShotsHeight with pictures).</summary>
@@ -131,18 +135,24 @@ namespace ExMoreStuff
 
         void Arrange()
         {
-            int h = RowHeight;   // the card's own row; the pictures go under it
-            Remove.Location = new Point(Width - Remove.Width - 14, (h - Remove.Height) / 2);
-            Change.Location = new Point(Remove.Left - Change.Width - 8, (h - Change.Height) / 2);
-            Code.Bounds = new Rectangle(Change.Left - 74, (h - 28) / 2, 64, 28);
-            ColorPictures.Location = new Point(Code.Left - 66 - 12 - ColorPictures.Width, (h - ColorPictures.Height) / 2);
-            Preview.Location = new Point(Code.Left - 66 - 12 - Preview.Width, (h - Preview.Height) / 2);
-            ShowFile.Bounds = new Rectangle(160, 60, Math.Max(40, TextRight - 160), 18);
+            int h = RowHeight, y = h - 14 - Change.Height;   // the button row; the pictures go under the card
+            Remove.Location = new Point(Width - Remove.Width - 14, y);
+            Change.Location = new Point(Remove.Left - Change.Width - 8, y);
+            Code.Bounds = new Rectangle(Change.Left - 74, y + (Change.Height - 28) / 2, 64, 28);
+            int left = Code.Left - 66 - 12;   // left of the code box's label
+            foreach (var shown in new[] { Tuple.Create(UnusedCode, unused), Tuple.Create(Preview, preview), Tuple.Create(ColorPictures, pictures) })
+            {
+                FlatButton b = shown.Item1;
+                if (!shown.Item2) continue;   // (its own flag: Visible is false until the card shows)
+                b.Location = new Point(left - b.Width, y);
+                left = b.Left - 8;
+            }
+            ShowFile.Bounds = new Rectangle(160, 64, Math.Max(40, TextRight - 160), 18);
             for (int i = 0; i < Thumbs.Length; i++) Thumbs[i].Bounds = new Rectangle(160 + i * (ThumbWidth + 10), h - 2, ThumbWidth, ThumbHeight);
             Invalidate();
         }
 
-        int TextRight { get { return (pictures ? ColorPictures.Left : preview ? Preview.Left : Code.Left - 66) - 12; } }
+        int TextRight { get { return Width - 14; } }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -159,7 +169,7 @@ namespace ExMoreStuff
             int x = 160, right = Math.Max(x + 40, TextRight);
             Theme.Draw(g, Title, Theme.Bold(11f), Theme.Text, new Rectangle(x, 14, right - x, 24), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             Theme.Draw(g, Kind + "   ·   docked for edits", Theme.Font(9f), Theme.Accent, new Rectangle(x, 40, right - x, 18), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-            Theme.Draw(g, Stage ? "Code" : Kind == "Color" ? "Color" : "Slot", Theme.Font(9f), Theme.Muted, new Rectangle(Code.Left - 60, Code.Top, 54, Code.Height), TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+            Theme.Draw(g, Stage ? "Code" : Kind == "Color" || Kind == "Colors" ? "Color" : "Slot", Theme.Font(9f), Theme.Muted, new Rectangle(Code.Left - 60, Code.Top, 54, Code.Height), TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
         }
     }
 

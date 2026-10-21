@@ -53,6 +53,20 @@ namespace ExMoreStuff
             catch (Exception) { return null; }
         }
 
+        /// <summary>A mod's own picture as it is when its long side fits `longest` (or it won't read), else made smaller as
+        /// PNG: one that fits isn't saved again.</summary>
+        public static byte[] Fit(byte[] bytes, int longest)
+        {
+            if (bytes == null) return null;
+            try
+            {
+                using (Image image = Read(bytes))
+                    if (Math.Max(image.Width, image.Height) <= longest) return bytes;
+            }
+            catch (Exception) { return bytes; }
+            return Png(bytes, longest) ?? bytes;
+        }
+
         /// <summary>The longest side of a mod's own picture in a package (its card shows it small).</summary>
         public const int PackageSide = 512;
 

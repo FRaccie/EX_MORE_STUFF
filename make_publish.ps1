@@ -27,7 +27,7 @@ $zip = Join-Path $publish "EXMoreStuff-$version.zip"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [IO.Compression.ZipFile]::Open($zip, "Create")
 [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, "$root\out\EXMoreStuff.exe", "EXMoreStuff.exe")
-$howTo = $archive.CreateEntry("How to use.txt")
+$howTo = $archive.CreateEntry("How to use.txt")   # ROLLBACK-NAME: "rollback game" stands for EMBER, never named to players (user 2026-10-21)
 $writer = New-Object IO.StreamWriter($howTo.Open())
 $writer.Write(@"
 EX More Stuff $version
@@ -39,7 +39,7 @@ New costumes and stages for Ultra Street Fighter IV, in new slots: the game's ow
 3. To undo: switch things off and apply again, or click "Disable everything".
 
 Nothing is installed on your PC: to remove the program, delete this folder.
-Online, custom costumes and stages need an EMBER build with custom content support.
+Online, custom costumes and stages need a rollback game with custom content support.
 More: the GitHub page this came from.
 "@)
 $writer.Dispose()

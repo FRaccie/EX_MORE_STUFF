@@ -295,7 +295,7 @@ namespace ExMoreStuff
             // always stay.
             byte[] page = Pictures.Png(picture, Pictures.PackageSide);   // made smaller: a mod's poster can be huge (user 2026-10-18)
             foreach (var p in costume.Pictures.Where(p => !madePictures.Contains(p.Key) && !(p.Key == "" && picture != null)))
-                package.Add(new KeyValuePair<string, byte[]>(to + p.Key + ".png", Pictures.Png(p.Value, Pictures.PackageSide) ?? p.Value));
+                package.Add(new KeyValuePair<string, byte[]>(to + p.Key + ".png", Pictures.Fit(p.Value, Pictures.PackageSide)));
             if (page != null) package.Add(new KeyValuePair<string, byte[]>(to + ".png", page));
             string temp = zipPath + ".tmp";
             Directory.CreateDirectory(Path.GetDirectoryName(zipPath));

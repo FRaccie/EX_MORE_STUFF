@@ -1,5 +1,7 @@
 // The Music page's waveform: the song's two channels (min/max peaks per pixel from a precomputed pyramid, so drawing
-// stays cheap at any zoom), the loop start (green) and loop end (orange) as draggable markers, the play cursor,
+// stays cheap at any zoom), the loop start (green) and loop end (orange) as draggable markers, the song's start (white,
+// its handle at the bottom; what's before it is left out, user 2026-10-21: "if i have a song with a particularly boring
+// intro i cant skip it"), the play cursor,
 // a time ruler. Mouse wheel zooms around the pointer (to single samples), a middle or right drag scrolls, a click
 // places the cursor, dragging a marker moves it (snapped to the nearest zero crossing when Snap is on).
 using System;
@@ -16,9 +18,9 @@ namespace ExMoreStuff
         int frames;
         List<short[]> levels;           // peak pyramid: level k = (min, max) per 2^(k+6) frames per channel, interleaved
         double view0, perPixel = 1;     // first frame shown, frames per pixel
-        int loopStart, loopEnd;
+        int loopStart, loopEnd, songStart;
         long cursor = 0, playhead = -1;
-        enum Drag { None, Start, End, Pan, Cursor }
+        enum Drag { None, Start, End, SongStart, Pan, Cursor }
         Drag drag;
         int dragX;
         double dragView0;
@@ -28,7 +30,7 @@ namespace ExMoreStuff
         public event Action CursorMoved;
 
         static readonly Color Wave = Color.FromArgb(130, 170, 230), WaveIntro = Color.FromArgb(110, 120, 140),
-                              StartColor = Color.FromArgb(70, 210, 120), EndColor = Color.FromArgb(242, 148, 22);
+                              StartColor = Color.FromArgb(70, 210, 120), EndColor = Color.FromArgb(242, 148, 22), SongStartColor = Color.FromArgb(235, 235, 240);
 
         public WaveformView()
         {
@@ -36,7 +38,9 @@ namespace ExMoreStuff
             TabStop = true;
         }
 
-        public int LoopStart { get { return loopStart; } set { loopStart = Clamp(value, 0, Math.Max(0, loopEnd - 1)); Invalidate(); } }
+        public int LoopStart { get { return loopStart; } set { loopStart = Clamp(value, 0, Math.Max(0, loopEnd - 1)); songStart = Math.Min(songStart, loopStart); Invalidate(); } }
+        /// <summary>Where the song starts: what's before it is left out (0: from its beginning); never after the loop start.</summary>
+        public int SongStart { get { return songStart; } set { songStart = Clamp(value, 0, loopStart); Invalidate(); } }
         public int LoopEnd { get { return loopEnd; } set { loopEnd = Clamp(value, loopStart + 1, frames); Invalidate(); } }
         public long CursorFrame { get { return cursor; } set { cursor = Math.Max(0, Math.Min(value, frames)); Invalidate(); } }
         public long Playhead { get { return playhead; } set { if (playhead == value) return; playhead = value; Invalidate(); } }   // the view stays where it is (user 2026-10-16: it jumped to follow the song, "i want to look at the part im looking at")
@@ -50,6 +54,7 @@ namespace ExMoreStuff
             frames = song == null ? 0 : song.Length / 2;
             loopEnd = Clamp(end <= 0 ? frames : end, 1, Math.Max(1, frames));
             loopStart = Clamp(start, 0, loopEnd - 1);
+            songStart = 0;
             cursor = 0;
             playhead = -1;
             BuildLevels();
@@ -137,7 +142,10 @@ namespace ExMoreStuff
             dragX = e.X;
             dragView0 = view0;
             if (e.Button == MouseButtons.Middle || e.Button == MouseButtons.Right) { drag = Drag.Pan; Cursor = Cursors.SizeWE; return; }
-            if (Math.Abs(e.X - X(loopStart)) <= 6) drag = Drag.Start;
+            // the song start's handle is at the bottom: there it wins over a loop marker in the same place
+            bool nearSong = Math.Abs(e.X - X(songStart)) <= 6, low = e.Y >= Height - 22;
+            if (nearSong && (low || (Math.Abs(e.X - X(loopStart)) > 6 && Math.Abs(e.X - X(loopEnd)) > 6))) drag = Drag.SongStart;
+            else if (Math.Abs(e.X - X(loopStart)) <= 6) drag = Drag.Start;
             else if (Math.Abs(e.X - X(loopEnd)) <= 6) drag = Drag.End;
             else { drag = Drag.Cursor; CursorFrame = FrameAt(e.X); if (CursorMoved != null) CursorMoved(); }
         }
@@ -160,12 +168,16 @@ namespace ExMoreStuff
                     LoopEnd = DragFrame(e.X);
                     if (Changed != null) Changed();
                     return;
+                case Drag.SongStart:
+                    SongStart = DragFrame(e.X);
+                    if (Changed != null) Changed();
+                    return;
                 case Drag.Cursor:
                     CursorFrame = FrameAt(e.X);
                     if (CursorMoved != null) CursorMoved();
                     return;
             }
-            Cursor = Math.Abs(e.X - X(loopStart)) <= 6 || Math.Abs(e.X - X(loopEnd)) <= 6 ? Cursors.SizeWE : Cursors.Cross;
+            Cursor = Math.Abs(e.X - X(loopStart)) <= 6 || Math.Abs(e.X - X(loopEnd)) <= 6 || Math.Abs(e.X - X(songStart)) <= 6 ? Cursors.SizeWE : Cursors.Cross;
         }
 
         protected override void OnMouseUp(MouseEventArgs e) { drag = Drag.None; Cursor = Cursors.Cross; }
@@ -219,8 +231,15 @@ namespace ExMoreStuff
                 DrawChannel(g, c, mid, lane / 2 - 3);
             }
             DrawRuler(g, ruler);
+            // what's before the song's start: dimmed, left out
+            if (songStart > 0)
+            {
+                int xa = X(songStart);
+                if (xa > 0) using (var cut = new SolidBrush(Color.FromArgb(150, 12, 13, 16))) g.FillRectangle(cut, 0, ruler, Math.Min(Width, xa), Height - ruler);
+            }
             DrawMarker(g, loopStart, StartColor, "loop start");
             DrawMarker(g, loopEnd, EndColor, "loop end");
+            DrawSongStart(g);
             int xc = X(cursor);
             using (var pen = new Pen(Color.FromArgb(160, 255, 255, 255)) { DashStyle = DashStyle.Dot }) g.DrawLine(pen, xc, ruler, xc, Height);
             if (playhead >= 0) using (var pen = new Pen(Color.White, 2f)) g.DrawLine(pen, X(playhead), ruler, X(playhead), Height);
@@ -295,6 +314,16 @@ namespace ExMoreStuff
             using (var pen = new Pen(colour, 2f)) g.DrawLine(pen, x, 0, x, Height);
             using (var brush = new SolidBrush(colour)) g.FillPolygon(brush, new[] { new Point(x - 6, 0), new Point(x + 6, 0), new Point(x, 9) });
             Theme.Draw(g, label, Theme.Bold(7.5f), colour, new Rectangle(x + 5, Height - 18, 80, 16), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        }
+
+        // the song's start: a white line, its handle (an upward triangle) at the bottom, its label above the loop ones
+        void DrawSongStart(Graphics g)
+        {
+            int x = X(songStart);
+            if (x < -40 || x > Width + 40) return;
+            using (var pen = new Pen(SongStartColor, 2f) { DashStyle = DashStyle.Dash }) g.DrawLine(pen, x, 20, x, Height);
+            using (var brush = new SolidBrush(SongStartColor)) g.FillPolygon(brush, new[] { new Point(x - 7, Height), new Point(x + 7, Height), new Point(x, Height - 11) });
+            Theme.Draw(g, "song start", Theme.Bold(7.5f), SongStartColor, new Rectangle(x + 5, Height - 34, 80, 16), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
         }
 
         public static string Time(double seconds, bool fine = true)

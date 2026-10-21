@@ -869,6 +869,8 @@ namespace ExMoreStuff
                         personal = true;   // only on this PC, online too
                     }
                     if (into.Count == 0) throw new InvalidOperationException(string.Join("; ", problems));
+                    // its old version's leftovers out (only when all of it went in)
+                    if (problems.Count == 0) { string version = Signature(mod); await Task.Run(() => PackagesPanel.DropLeftovers(g, "gamebanana:" + mod.Id + ":", version)); }
                     done = mod.Name + " is in: " + string.Join(", ", into) + (personal ? " (only you see " + (into.Count > 1 ? "those" : "it") + ")" : ", the same for everyone who has it") +
                            (firstModel ? ". Its versions have models of their own; the first one's is used" : "") + (problems.Count > 0 ? ". Not put in: " + string.Join("; ", problems) : "") +
                            Notes(g, before);

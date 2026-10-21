@@ -2086,15 +2086,32 @@ namespace ExMoreStuff
             tips.SetToolTip(row.ShowFile, "Show it in its folder");
             row.Code.MaxLength = item.IsStage ? 3 : 2;
             row.Code.Text = item.IsStage ? item.Code : item.IsColor ? item.Color.ToString() : item.Slot.ToString();
-            if (pack)   // its colors' numbers: changed one at a time on Package codes once it's in the game
+            if (pack)   // its colors' numbers: picked (PickSlot), they move together on Confirm
             {
                 row.Code.MaxLength = 7;
                 row.Code.Text = files.Min(f => f.Item.Color) + "-" + files.Max(f => f.Item.Color);
                 row.Code.ReadOnly = true;
-                row.Change.Visible = false;
             }
             row.ColorPictures.Click += (s, e) => { openTool = "creation"; creationPage.SetGame(game); ShowTab(advancedTab); };
-            row.Change.Click += async (s, e) => await MoveDocked(file, row);
+            row.Change.Click += async (s, e) =>
+            {
+                int start;
+                string typed = row.Code.Text.Trim();
+                if (pack) { if (int.TryParse(typed.Split('-')[0], out start)) await MoveDockedPack(files, start, row); }
+                else await MoveDocked(file, row);
+            };
+            // a costume's or color's slot box: which slots are free and which are taken, a click moves it there (user 2026-10-21:
+            // "when you click the slot option (if its a color or costume) it should show you which ones you will be taking")
+            if (!item.IsStage)
+            {
+                row.Code.Cursor = Cursors.Hand;
+                row.Code.Click += async (s, e) => await PickSlot(files, row);
+            }
+            else   // a stage's: Get an unused stage code puts the next one for GameBanana in its box (user 2026-10-21); Confirm moves it
+            {
+                row.CanGetCode = true;
+                row.UnusedCode.Click += async (s, e) => await OfferStageCode(file, row);
+            }
             row.Remove.Click += (s, e) =>
             {
                 Docked.Remove(file.Package);
@@ -2136,6 +2153,110 @@ namespace ExMoreStuff
         }
 
         // a docked file to another slot, stage code or color number: only its zip is rewritten (it isn't in the game)
+        // A docked costume's or color's slot picker under its slot box: the fighter's slots (8-99) or the costume's colors
+        // (30-99) as Free codes shows them, slots and colors its own mods use counted as taken; hovering shows what it would
+        // take (a color pack: all its colors, their spacing kept); a click moves it there (asked first)
+        async Task PickSlot(List<Installed> files, DockedRow row)
+        {
+            Item item = files[0].Item;
+            if (SharedCodes.HeldBy.Count == 0) try { SharedCodes.Holders(await GameBanana.All()); } catch (Exception) { }   // who holds what on GameBanana
+            var mine = files.Select(f => f.Item.Key).ToList();
+            var others = installed.Concat(removed).Concat(Docked.Load()).Where(r => !mine.Contains(r.Item.Key) && r.Item.Fighter == item.Fighter).ToList();
+            int first = files.Min(f => f.Item.Color);
+            var grid = new SeatGrid { Fighter = item.Fighter, Margin = Padding.Empty };
+            if (item.IsColor)
+            {
+                grid.First = Catalog.FirstCustomColor;
+                grid.Last = Catalog.LastColor;
+                grid.Takes = files.Select(f => f.Item.Color - first).OrderBy(t => t).ToArray();
+                string folder = Game.IsGameFolder(game) ? Game.FolderFor(game, item) : null;
+                grid.Answer = n =>
+                {
+                    Installed used = others.FirstOrDefault(r => r.Item.IsColor && r.Item.Slot == item.Slot && r.Item.Color == n);
+                    if (used != null) return new Seats.Answer { Kind = Seats.Kind.Personal, Text = "Color " + n + " is used by " + Weight.Name(used) };
+                    if (folder != null && File.Exists(Path.Combine(folder, item.Fighter + "_" + item.Slot.ToString("D2") + "_" + n.ToString("D2") + ".col.emb")) && !files.Any(f => f.Item.Color == n))
+                        return new Seats.Answer { Kind = Seats.Kind.NotFree, Text = "The game folder already has color " + n };
+                    return new Seats.Answer { Kind = Seats.Kind.Free, Text = "Color " + n + " is free" };
+                };
+            }
+            else
+                grid.Answer = n =>
+                {
+                    Installed used = others.FirstOrDefault(r => r.Item.IsCostume && r.Item.Slot == n);
+                    return used != null ? new Seats.Answer { Kind = Seats.Kind.Personal, Text = Fighters.Name(item.Fighter) + " " + n.ToString("D2") + " is used by " + Weight.Name(used) }
+                                        : Seats.Costume(item.Fighter, n);
+                };
+            grid.Selected = item.IsColor ? first : item.Slot;
+            grid.Width = 13 * 43 - 5;   // thirteen across: room for the legend
+            var panel = new Panel { BackColor = Theme.Card, Padding = new Padding(10), Size = new Size(grid.Width + 20, grid.Height + 20) };
+            grid.Location = new Point(10, 10);
+            panel.Controls.Add(grid);
+            var drop = new ToolStripDropDown { Padding = Padding.Empty, BackColor = Theme.Card, DropShadowEnabled = true };
+            var host = new ToolStripControlHost(panel) { Padding = Padding.Empty, Margin = Padding.Empty, AutoSize = false, Size = panel.Size };
+            drop.Items.Add(host);
+            drop.Closed += (s, e) => BeginInvoke((Action)(() => drop.Dispose()));
+            // a pick goes in its box; Confirm moves it
+            grid.Picked += n =>
+            {
+                drop.Close();
+                row.Code.Text = item.IsColor && files.Count > 1 ? n + "-" + (n + grid.Takes.Max()) : n.ToString(item.IsColor ? "0" : "D2");
+                row.Change.Focus();
+            };
+            drop.Show(row.Code, new Point(0, row.Code.Height + 2));
+        }
+
+        // GameBanana uploaders' stage codes (user 2026-10-21: "B and then just go up the letters. A and T are taken"): B01-B99,
+        // then D01, E01 ... Z99; not C (the catalog's), U (players' own), A or T (ours)
+        const string StageLetters = "BDEFGHIJKLMNOPQRSVWXYZ";
+
+        /// <summary>The first of those no GameBanana mod holds (deleted ones too) and nothing on this PC uses, or null.</summary>
+        static string UnusedStageCode(string game, IEnumerable<string> usedHere)
+        {
+            var used = new HashSet<string>(usedHere.Where(c => c != null), StringComparer.OrdinalIgnoreCase);
+            foreach (char letter in StageLetters)
+                for (int n = 1; n <= 99; n++)
+                {
+                    string code = letter + n.ToString("D2");
+                    if (!Stages.IsCustomCode(code) || used.Contains(code) || SharedCodes.HeldBy.ContainsKey("stage " + code) ||
+                        Catalog.NotFree(true, code, 0) || Catalog.PersonalSeat(true, code, 0)) continue;
+                    if (Game.IsGameFolder(game) && File.Exists(Path.Combine(Game.PatchFolder(game), "battle", "stage", "STG_" + code + ".emz"))) continue;
+                    return code;
+                }
+            return null;
+        }
+
+        // a docked stage's Get an unused stage code: the next one in its code box, for Confirm
+        async Task OfferStageCode(Installed file, DockedRow row)
+        {
+            if (SharedCodes.HeldBy.Count == 0) try { SharedCodes.Holders(await GameBanana.All()); } catch (Exception) { }   // who holds what on GameBanana
+            string code = UnusedStageCode(game, installed.Concat(removed).Concat(Docked.Load()).Where(r => r.Item.IsStage && r.Item.Key != file.Item.Key).Select(r => r.Item.Code));
+            if (code == null) return;
+            row.Code.Text = code;
+            row.Change.Focus();
+        }
+
+        // a docked color pack's colors moved together, their spacing kept (each in its zip as Package codes does it)
+        async Task MoveDockedPack(List<Installed> files, int start, DockedRow row)
+        {
+            var colors = files.OrderBy(f => f.Item.Color).ToList();
+            int shift = start - colors[0].Item.Color, last = colors[colors.Count - 1].Item.Color;
+            if (shift == 0) return;
+            if (start < Catalog.FirstCustomColor || last + shift > Catalog.LastColor)
+            {
+                MessageBox.Show(this, "Can't change it: its colors would go past " + Catalog.FirstCustomColor + "-" + Catalog.LastColor + ".", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            string to = "colors " + start + "-" + (last + shift);
+            if (MessageBox.Show(this, "Move " + row.Title + " to " + to + "?\n\nIts zip is rewritten with the new numbers (" + Path.GetFileName(colors[0].Package) + ").",
+                    Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) return;
+            // moving up: the highest first, down: the lowest first, so each lands on a number that's free by then
+            var order = shift > 0 ? colors.AsEnumerable().Reverse().ToList() : colors;
+            try { await Task.Run(() => { foreach (Installed f in order) CodeChange.MoveDocked(f, null, f.Item.Color + shift); }); }
+            catch (Exception ex) { MessageBox.Show(this, "It didn't all move: " + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            BuildAdvanced();
+            UpdateStatus(row.Title + " is now " + to);
+        }
+
         async Task MoveDocked(Installed file, DockedRow row)
         {
             Item item = file.Item;

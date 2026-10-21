@@ -166,6 +166,11 @@ namespace ExMoreStuff
         public string Fighter;
         public int Selected;
         public event Action<int> Picked;
+        // another range and its own answers (a docked file's slot picker, user 2026-10-21: colors 30-99, slots its own mods
+        // use), and what a pick takes from the one picked (a color pack: its colors' spacing), shown together on hover
+        public int First = Catalog.FirstCustomCostume, Last = Catalog.LastSlot;
+        public Func<int, Seats.Answer> Answer;
+        public int[] Takes = { 0 };
         const int Chip = 38, Gap = 5, LegendHeight = 34, Swatch = 16;
         readonly ToolTip tip = new ToolTip { InitialDelay = 200 };
         int hover;
@@ -192,7 +197,12 @@ namespace ExMoreStuff
         int LegendTop { get { return Height - LegendHeight + 10; } }
 
         int PerRow { get { return Math.Max(1, (Width + Gap) / (Chip + Gap)); } }
-        static int Count { get { return Catalog.LastSlot - Catalog.FirstCustomCostume + 1; } }
+        int Count { get { return Last - First + 1; } }
+
+        Seats.Answer AnswerFor(int n) { return Answer != null ? Answer(n) : Seats.Costume(Fighter, n); }
+
+        // the chips a pick at `n` takes (hovered): n and its pack's other colors
+        bool Taking(int n) { return hover > 0 && Takes.Any(t => hover + t == n); }
 
         protected override void OnResize(EventArgs e)
         {
@@ -207,7 +217,7 @@ namespace ExMoreStuff
 
         int At(Point p)
         {
-            for (int i = 0; i < Count; i++) if (ChipAt(i).Contains(p)) return Catalog.FirstCustomCostume + i;
+            for (int i = 0; i < Count; i++) if (ChipAt(i).Contains(p)) return First + i;
             return 0;
         }
 
@@ -218,7 +228,7 @@ namespace ExMoreStuff
             if (n == hover) return;
             hover = n;
             Invalidate();
-            tip.SetToolTip(this, n == 0 || Fighter == null ? "" : Seats.Costume(Fighter, n).Text);
+            tip.SetToolTip(this, n == 0 || (Fighter == null && Answer == null) ? "" : AnswerFor(n).Text);
         }
 
         protected override void OnMouseLeave(EventArgs e) { hover = 0; Invalidate(); base.OnMouseLeave(e); }
@@ -233,13 +243,13 @@ namespace ExMoreStuff
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            if (Fighter == null) return;
+            if (Fighter == null && Answer == null) return;
             Graphics g = e.Graphics;
             Smooth(g);
             for (int i = 0; i < Count; i++)
             {
-                int n = Catalog.FirstCustomCostume + i;
-                var kind = Seats.Costume(Fighter, n).Kind;
+                int n = First + i;
+                var kind = AnswerFor(n).Kind;
                 Rectangle chip = ChipAt(i);
                 Color fill = kind == Seats.Kind.Held ? Color.FromArgb(170, Theme.Accent) : kind == Seats.Kind.Personal ? Color.FromArgb(170, Theme.OwnBadge)
                            : kind == Seats.Kind.NotFree ? Theme.Well : Theme.Card;
@@ -247,9 +257,10 @@ namespace ExMoreStuff
                            : kind == Seats.Kind.NotFree ? Color.FromArgb(90, Theme.Muted) : Theme.GoodText;
                 using (var path = Theme.Rounded(new RectangleF(chip.X + 0.5f, chip.Y + 0.5f, chip.Width - 1, chip.Height - 1), 6))
                 {
-                    using (var brush = new SolidBrush(n == hover ? ControlPaint.Light(fill, 0.15f) : fill)) g.FillPath(brush, path);
-                    Color edge = n == Selected ? Theme.AccentHover : n == hover ? Color.FromArgb(120, 255, 255, 255) : Theme.Line;
-                    using (var pen = new Pen(edge, n == Selected ? 2f : 1f)) g.DrawPath(pen, path);
+                    bool taking = Taking(n);
+                    using (var brush = new SolidBrush(taking ? ControlPaint.Light(fill, 0.15f) : fill)) g.FillPath(brush, path);
+                    Color edge = n == Selected || (taking && Takes.Length > 1) ? Theme.AccentHover : taking ? Color.FromArgb(120, 255, 255, 255) : Theme.Line;
+                    using (var pen = new Pen(edge, n == Selected || (taking && Takes.Length > 1) ? 2f : 1f)) g.DrawPath(pen, path);
                 }
                 Theme.Draw(g, n.ToString("D2"), Theme.Bold(9.5f), text, chip, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }

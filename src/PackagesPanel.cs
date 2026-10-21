@@ -186,6 +186,24 @@ namespace ExMoreStuff
             return notes.Count > 0 ? string.Join("\n", notes) : null;
         }
 
+        /// <summary>An update's leftovers (user 2026-10-20: Tom's stages kept saying Update after updating): the packages a
+        /// mod (`key`, "gamebanana:123:") put in that its new version (`version`) didn't put in again (its zip renamed on
+        /// GameBanana gives its parts other ids, so they went in beside the old ones, under other codes): out for good, their
+        /// zips to the Recycle Bin when nothing else uses them. Returns how many.</summary>
+        public static int DropLeftovers(string game, string key, string version)
+        {
+            int count = 0;
+            foreach (Installed r in Installer.Load(game).Concat(Installer.Removed(game))
+                         .Where(r => (r.Item.Id ?? "").StartsWith(key, StringComparison.OrdinalIgnoreCase) && r.Item.Version != version).ToList())
+            {
+                bool recycle = RecyclesZip(game, r);
+                PurgeForGood(game, r);
+                if (recycle) try { RecycleZip(r.Package); } catch (Exception) { }
+                count++;
+            }
+            return count;
+        }
+
         public static void RecycleZip(string path)
         {
             Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path, Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,

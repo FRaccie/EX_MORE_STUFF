@@ -129,7 +129,7 @@ namespace ExMoreStuff
             openSong.Click += async (s, e) => await OpenSong();
             openSfxt.Click += async (s, e) => await OpenSfxt();
             openGame.Click += async (s, e) => await OpenGameTheme();
-            play.Click += (s, e) => Play(wave.CursorFrame, loop.Checked);
+            play.Click += (s, e) => Play(Math.Max(wave.CursorFrame, wave.SongStart), loop.Checked);   // never in the part left out
             stop.Click += (s, e) => player.Stop();
             testLoop.Click += (s, e) => Play(Math.Max(wave.LoopStart, wave.LoopEnd - 4 * Song.Rate), true);
             whole.Click += (s, e) => wave.ShowAll();
@@ -613,18 +613,37 @@ namespace ExMoreStuff
             songPeak = 1;
             foreach (short v in s.Pcm) { int a = Math.Abs((int)v); if (a > songPeak) songPeak = a; }
             wave.SetSong(s.Pcm, ls, le);
+            wave.SongStart = pendingSongStart;   // a saved song's own (ApplySettings), else its beginning
+            pendingSongStart = 0;
             LoopChanged();
             UpdateEditor();
         }
 
         // -- settings (saved with a WAV) -----------------------------------------------------------------------------
+        int pendingSongStart;   // a saved song's start, put on the waveform once it has the song
+
         string Settings()
         {
             return new JavaScriptSerializer().Serialize(new Dictionary<string, object>
             {
                 { "format", 1 }, { "volumeDb", volumeDb }, { "matchVolume", loud.Checked }, { "smoothSeam", smooth.Checked },
-                { "ultra", UltraModes[ultraMode.Selected] }, { "lowHealth", LowModes[lowMode.Selected] },
+                { "ultra", UltraModes[ultraMode.Selected] }, { "lowHealth", LowModes[lowMode.Selected] }, { "songStart", wave.SongStart },
             });
+        }
+
+        // The song as it goes in: from its start (the part before it left out, user 2026-10-21: "if i have a song with a
+        // particularly boring intro i cant skip it"), its loop moved with it, a few milliseconds faded in so it doesn't click
+        short[] FromStart(short[] pcm, ref int ls, ref int le)
+        {
+            int start = Math.Min(wave.SongStart, ls);
+            if (start <= 0) return pcm;
+            var cut = new short[pcm.Length - start * 2];
+            Array.Copy(pcm, start * 2, cut, 0, cut.Length);
+            int fade = Math.Min(Song.Rate * 5 / 1000, cut.Length / 2);
+            for (int i = 0; i < fade; i++) for (int c = 0; c < 2; c++) cut[i * 2 + c] = (short)(cut[i * 2 + c] * i / fade);
+            ls -= start;
+            le -= start;
+            return cut;
         }
 
         void ApplySettings(string json)
@@ -638,6 +657,7 @@ namespace ExMoreStuff
                 if (j.TryGetValue("smoothSeam", out v)) smooth.Checked = Convert.ToBoolean(v);
                 if (j.TryGetValue("ultra", out v) && Array.IndexOf(UltraModes, v) >= 0) ultraMode.Selected = Array.IndexOf(UltraModes, v);
                 if (j.TryGetValue("lowHealth", out v) && Array.IndexOf(LowModes, v) >= 0) lowMode.Selected = Array.IndexOf(LowModes, v);
+                if (j.TryGetValue("songStart", out v)) pendingSongStart = Math.Max(0, Convert.ToInt32(v, CultureInfo.InvariantCulture));
             }
             catch (Exception) { }     // settings from a newer or broken file: the song still opens
         }
@@ -711,7 +731,7 @@ namespace ExMoreStuff
             int ls = wave.LoopStart, le = wave.LoopEnd;
             if (!startBox.Focused) startBox.Text = Exact(ls);
             if (!endBox.Focused) endBox.Text = Exact(le);
-            lengthLabel.Text = "Intro " + WaveformView.Time(ls / (double)Song.Rate) + "   Loop " + WaveformView.Time((le - ls) / (double)Song.Rate);
+            lengthLabel.Text = "Intro " + WaveformView.Time((ls - wave.SongStart) / (double)Song.Rate) + "   Loop " + WaveformView.Time((le - ls) / (double)Song.Rate);
             var pcm = Preview(false);
             if (song.GameLoop && ls == song.LoopStart && le == song.LoopEnd)
             {
@@ -925,6 +945,8 @@ namespace ExMoreStuff
             player.Stop();
             var pcm = Preview(false);
             int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
+            int keptLs = ls, keptLe = le;   // the whole song's, kept with it
+            pcm = FromStart(pcm, ref ls, ref le);
             string name = song.Name, g = game, roundProblem = null, source = songFile, settings = Settings(), keepProblem = null;
             var have = installed;
             var levels = Levels();
@@ -935,7 +957,7 @@ namespace ExMoreStuff
                 MusicBank.Install(g, target, bank, about);
                 if (target.Round > 1) roundProblem = RoundMod.Ensure(g);   // Tom's Round BGM mod comes with round 2/3 music
                 // and kept in the songs folder, so giving the game's music back never loses it
-                try { MusicBank.Keep(target, layerIndex, name, bank, source, ls, le, settings); }
+                try { MusicBank.Keep(target, layerIndex, name, bank, source, keptLs, keptLe, settings); }
                 catch (Exception ex) { keepProblem = ex.Message; }
             })) return;
             Reload();
@@ -953,6 +975,8 @@ namespace ExMoreStuff
             player.Stop();
             var pcm = Preview(false);
             int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
+            int keptLs = ls, keptLe = le;
+            pcm = FromStart(pcm, ref ls, ref le);
             string name = song.Name, g = game, zip = docked, source = songFile, settings = Settings(), keepProblem = null;
             var levels = Levels();
             if (!await Run("Putting " + name + " in the docked file", () =>
@@ -961,7 +985,7 @@ namespace ExMoreStuff
                 var bank = BuildFor(g, null, target, layerIndex, pcm, ls, le, name, ultra, low, levels, out about,
                                     DockedBank(zip, target.File) ?? File.ReadAllBytes(MusicBank.GameFile(g, target.TemplateFile)), DockedSong(zip, target.File));
                 DockedMusic.Put(zip, target.File, bank, about);
-                try { MusicBank.Keep(target, layerIndex, name, bank, source, ls, le, settings); }
+                try { MusicBank.Keep(target, layerIndex, name, bank, source, keptLs, keptLe, settings); }
                 catch (Exception ex) { keepProblem = ex.Message; }
             })) return;
             Reload();
@@ -993,6 +1017,7 @@ namespace ExMoreStuff
             player.Stop();
             var pcm = Preview(false);
             int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
+            pcm = FromStart(pcm, ref ls, ref le);
             string name = song.Name, g = game, preview = Path.ChangeExtension(path, ".mp3");
             var levels = Levels();
             if (!await Run("Exporting " + name, () =>
@@ -1066,6 +1091,8 @@ namespace ExMoreStuff
             player.Stop();
             var pcm = Preview(false);
             int ls = wave.LoopStart, le = wave.LoopEnd, layerIndex = Layer, ultra = ultraMode.Selected, low = lowMode.Selected;
+            int keptLs = ls, keptLe = le;
+            pcm = FromStart(pcm, ref ls, ref le);
             string settings = Settings(), name = song.Name, g = game, source = songFile, kept = null, zip = docked;
             var have = installed;
             var levels = Levels();
@@ -1074,7 +1101,7 @@ namespace ExMoreStuff
                 InstalledSong about;
                 byte[] start = zip == null ? null : DockedBank(zip, target.File) ?? File.ReadAllBytes(MusicBank.GameFile(g, target.TemplateFile));   // a docked stage's: on its file's music
                 kept = MusicBank.Keep(target, layerIndex, name, BuildFor(g, have, target, layerIndex, pcm, ls, le, name, ultra, low, levels, out about,
-                                                                      start, zip == null ? null : DockedSong(zip, target.File)), source, ls, le, settings);
+                                                                      start, zip == null ? null : DockedSong(zip, target.File)), source, keptLs, keptLe, settings);
             })) return;
             Say("Saved as " + kept + " in your songs folder (the Music folder button at the bottom)");
             Toast.Show(this, "Songs saved to disk");   // always "songs" (user)

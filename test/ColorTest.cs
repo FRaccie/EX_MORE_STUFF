@@ -121,6 +121,18 @@ namespace ExMoreStuff
             string kenFolder = Path.Combine(chara, "KEN");
             Check(!File.Exists(Path.Combine(kenFolder, "KEN_02_30.col.emb")) && File.Exists(Path.Combine(kenFolder, "KEN_02_33.col.emb")), "in the game as 31-33");
 
+            Console.WriteLine("An update's leftovers (user 2026-10-20: Tom's stages kept saying Update)");
+            var v1 = new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>("old_zip/HKN_01_30.col.emb", col), new KeyValuePair<string, byte[]>("old_zip/HKN_01_30.obj.emm", emm) };
+            ModFile.InstallFiles(game, v1, "gamebanana:77", "Hakan Blue", "me", "", null, s => { }, "v1");
+            var v2 = new List<KeyValuePair<string, byte[]>> { new KeyValuePair<string, byte[]>("new_zip/HKN_01_40.col.emb", col), new KeyValuePair<string, byte[]>("new_zip/HKN_01_40.obj.emm", emm) };
+            ModFile.InstallFiles(game, v2, "gamebanana:77", "Hakan Blue", "me", "", null, s => { }, "v2");
+            Check(Installer.Load(game).Count(r => r.Item.Id.StartsWith("gamebanana:77:")) == 2, "the new version went in beside the old (another file in it)");
+            Check(PackagesPanel.DropLeftovers(game, "gamebanana:77:", "v2") == 1, "one leftover dropped");
+            var hkn = Installer.Load(game).Where(r => r.Item.Id.StartsWith("gamebanana:77:")).ToList();
+            Check(hkn.Count == 1 && hkn[0].Item.Color == 40 && hkn[0].Item.Version == "v2" && !File.Exists(Path.Combine(chara, "HKN", "HKN_01_30.col.emb")),
+                  "only the new version is in; the old one's files are out of the game");
+            Check(PackagesPanel.DropLeftovers(game, "gamebanana:77:", "v2") == 0 && Installer.Load(game).Any(r => r.Item.Fighter == "KEN"), "nothing more; other mods untouched");
+
             Console.WriteLine("A pack added before, a zip a color: merged into one");
             var chun = new List<string>();
             foreach (int n in new[] { 30, 31 })
