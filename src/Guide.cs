@@ -47,8 +47,8 @@ namespace ExMoreStuff
                 Buttons(width, Tuple.Create("Add Mod From File", "addfile")),
                 new Heading("2   Get it ready", width),
                 ShadowLabel.Note("Its code: find one nobody uses on Free codes (costume slots " + Catalog.FirstCustomCostume + "-" + Catalog.LastShared + " are for sharing), " +
-                                 "type it on the docked card and press Change.\n\nCostume colors: press Color pictures on the docked card. The game " +
-                                 "opens once per color and the pictures go into the zip, for rollback games' character select. Right-click a color there for a " +   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
+                                 "type it on the docked card and press Change.\n\nCostume colors: press Color pictures on the docked card. EX More " +
+                                 "Stuff draws each color and the pictures go into the zip, for rollback games' character select. Right-click a color there for a " +   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                                  "full-size picture for your mod's page. Make sure all 10 colors are there and each looks different at a glance. Right-click " +
                                  "a color that only repeats another > Force debug color.\n\nSongs: make them on Advanced > Music and press Export for " +
                                  "GameBanana. It asks for a picture, which goes inside the zip for the song's card, and saves the zip with a 5-second preview " +

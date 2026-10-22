@@ -13,7 +13,8 @@ namespace ExMoreStuff
     //                                        never converted in place)
     //   --free-codes <FIGHTER>               the shared slots nobody holds (Advanced > Free codes)
     //   --set-code "<docked zip>" <slot>     the docked package moved to another slot (or stage code), its zip rewritten
-    //   --color-pictures "<docked zip>" [1,2,5-10]   color pictures into the zip (the game runs; refused while it's open)
+    //   --color-pictures "<docked zip>" [1,2,5-10]   color pictures into the zip (drawn by EX More Stuff; the game runs
+    //                                        only for a costume that can't be drawn; refused while it's open)
     //   --check-costumes [<folder or zip> ...] [--report "<file.txt>"]   the costume check (CostumeCheck): what breaks in
     //                                        the game or desyncs online; default the costumes in the game's patch_ae2_tu3
     //                                        and in Mods. The report, a text file to look into, with --report

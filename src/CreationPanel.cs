@@ -11,7 +11,8 @@ namespace ExMoreStuff
 {
     // Advanced > Costume creation (user 2026-10-12: "a new little sub menu for costume creation"): tools for people
     // making costumes. The first: color pictures. A costume of the player's own (a package with its zip) in each of its
-    // 10 colors as the game draws it, standing idle, no stage or life bars (PerfTest.ColorPictures), put into its package
+    // 10 colors, drawn by EX More Stuff in the stance (CostumeRender; the game's picture when it can't), no stage or life
+    // bars (PerfTest.ColorPictures), put into its package
     // as <prefix>_<CC>.png for EMBER's character select, ready to share (Tom: "a render of the character with the costume
     // for each color in chara select"). Each row shows the pictures its package has. Color packs too (user 2026-10-18:
     // "where do i go to generate the colors for this?"): a row for a pack's colors of one costume (a zip each), each
@@ -101,9 +102,9 @@ namespace ExMoreStuff
                 new Heading("Costume check", width),
                 CheckBar(width),
                 new Heading("Color pictures", width),
-                ShadowLabel.Note("EX More Stuff opens the game once per color, a few seconds each, and takes a picture of " +
-                                 "your costume or color pack standing idle, as the game draws it (no stage, no life bars). They go into the costume's package for rollback games' " +   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
-                                 "character select, ready to share. Steam needs to be running and the game closed.", width),
+                ShadowLabel.Note("EX More Stuff draws your costume or color pack in each color, in its fighting stance and " +
+                                 "lit like the training stage, as rollback games' own costume pictures are made (no stage, no life bars). They go into the costume's package for rollback games' " +   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
+                                 "character select, ready to share. A costume it can't draw is pictured by the game instead: Steam needs to be running and the game closed then.", width),
             };
             controls.Add(search);
             status.Width = width - 16;
@@ -215,8 +216,7 @@ namespace ExMoreStuff
             if (blocked != null) { Say("Can't make them now: " + blocked, true); return; }
             string name = Weight.Name(record), g = game, problem = null;
             string which = colors.Count == PerfTest.ColorCount ? "each color" : colors.Count == 1 ? "color " + colors[0] : "colors " + string.Join(", ", colors);
-            if (MessageBox.Show(FindForm(), "EX More Stuff opens the game " + (colors.Count == 1 ? "once" : colors.Count + " times") + ", a few seconds each, and takes a picture of " +
-                    name + " standing in " + which + ". " + (colors.Count == 1 ? "It goes" : "They go") + " into its package for rollback games' character select.", "EX More Stuff",   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
+            if (MessageBox.Show(FindForm(), "EX More Stuff draws " + name + " standing in " + which + ", a second or two each. " + (colors.Count == 1 ? "It goes" : "They go") + " into its package for rollback games' character select.", "EX More Stuff",   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                     MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
             SortedDictionary<int, Bitmap> made = null;
             SetWorking(true);
@@ -252,8 +252,7 @@ namespace ExMoreStuff
             if (blocked != null) { Say("Can't make them now: " + blocked, true); return; }
             string name = PackName(packs[0]), g = game, problem = null;
             string which = picked.Count == 1 ? "color " + picked[0].Item.Color : "colors " + string.Join(", ", picked.Select(p => p.Item.Color));
-            if (MessageBox.Show(FindForm(), "EX More Stuff opens the game " + (picked.Count == 1 ? "once" : picked.Count + " times") + ", a few seconds each, and takes a picture of " +
-                    Fighters.Name(packs[0].Item.Fighter) + " standing in " + which + ". " + (picked.Count == 1 ? "It goes into the color's package and shows" : "They go into each color's package and show") + " on the Costumes page.", "EX More Stuff",
+            if (MessageBox.Show(FindForm(), "EX More Stuff draws " + Fighters.Name(packs[0].Item.Fighter) + " standing in " + which + ", a second or two each. " + (picked.Count == 1 ? "It goes into the color's package and shows" : "They go into each color's package and show") + " on the Costumes page.", "EX More Stuff",
                     MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
             SortedDictionary<int, Bitmap> made = null;
             SetWorking(true);

@@ -68,10 +68,25 @@ namespace ExMoreStuff
         // The top level of a DXT1/DXT3/DXT5 or 32-bit DDS texture.
         internal static Bitmap DecodeDds(byte[] d)
         {
+            int width, height;
+            byte[] pixels = DecodePixels(d, out width, out height);
+            if (pixels == null) return null;
+            var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            BitmapData lockData = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            for (int y = 0; y < height; y++)
+                Marshal.Copy(pixels, y * width * 4, lockData.Scan0 + y * lockData.Stride, width * 4);
+            bitmap.UnlockBits(lockData);
+            return bitmap;
+        }
+
+        // The top level of a DDS texture as B, G, R, A bytes (null for a kind not read here).
+        internal static byte[] DecodePixels(byte[] d, out int width, out int height)
+        {
+            width = height = 0;
             if (d.Length < 128 || Encoding.ASCII.GetString(d, 0, 4) != "DDS ") return null;
-            int height = BitConverter.ToInt32(d, 12), width = BitConverter.ToInt32(d, 16);
+            height = BitConverter.ToInt32(d, 12); width = BitConverter.ToInt32(d, 16);
             string fourcc = Encoding.ASCII.GetString(d, 84, 4);
-            var pixels = new byte[width * height * 4];             // B, G, R, A
+            var pixels = new byte[width * height * 4];
             if (fourcc == "DXT1" || fourcc == "DXT3" || fourcc == "DXT5")
             {
                 int blockBytes = fourcc == "DXT1" ? 8 : 16, at = 128;
@@ -80,14 +95,13 @@ namespace ExMoreStuff
                         DecodeBlock(d, at, fourcc, pixels, width, height, bx, by);
             }
             else if (BitConverter.ToInt32(d, 88) == 32)
+            {
                 Buffer.BlockCopy(d, 128, pixels, 0, Math.Min(pixels.Length, d.Length - 128));
+                if (BitConverter.ToUInt32(d, 92) == 0x000000FF)   // red in the low byte: R, G, B, A, swapped to B, G, R, A
+                    for (int i = 0; i < pixels.Length; i += 4) { byte r = pixels[i]; pixels[i] = pixels[i + 2]; pixels[i + 2] = r; }
+            }
             else return null;
-            var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            BitmapData lockData = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-            for (int y = 0; y < height; y++)
-                Marshal.Copy(pixels, y * width * 4, lockData.Scan0 + y * lockData.Stride, width * 4);
-            bitmap.UnlockBits(lockData);
-            return bitmap;
+            return pixels;
         }
 
         static void DecodeBlock(byte[] d, int at, string fourcc, byte[] pixels, int width, int height, int bx, int by)

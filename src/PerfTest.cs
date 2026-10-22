@@ -369,13 +369,16 @@ namespace ExMoreStuff
         public const int ColorCount = 10;
         public const int PictureWidth = 256, PictureHeight = 384;   // as the pattern pictures (ColorVariants), for Ember's gallery
 
-        /// <summary>An installed custom costume in the colors asked for (1-10; all when null), P1 standing idle as the game
-        /// draws it, cut out (off the window's thread: about 7 seconds of game a color). `say` says which color. A docked
+        /// <summary>An installed custom costume in the colors asked for (1-10; all when null), drawn (Drawn) or, when it can't
+        /// be, P1 standing idle as the game draws it, cut out (off the window's thread: about 7 seconds of game a color). `say` says which color. A docked
         /// file (`docked`, its zip: not in the game) is unpacked beside the program for the runs and in Ryu's Original's
         /// place from there; the unpacked files go after.</summary>
         public static SortedDictionary<int, Bitmap> ColorPictures(string game, Item item, IList<int> colors, Action<string> say, bool fullSize = false, string docked = null)
         {
             colors = colors ?? Enumerable.Range(1, ColorCount).ToList();
+            var drawn = Drawn(game, item.Fighter + "_" + item.Slot.ToString("D2"), () => docked != null ? ZipCostume(docked, item) : Read(CostumeSwaps.CostumeFiles(game, item.Fighter, item.Slot)),
+                              colors.Where(c => c >= 1 && c <= ColorCount).Distinct().OrderBy(c => c).ToList(), say, fullSize);
+            if (drawn != null) return drawn;
             string blocked = Blocked();
             if (blocked != null) throw new InvalidOperationException(blocked);
             string fighter = item.Fighter;
@@ -415,6 +418,79 @@ namespace ExMoreStuff
             }
         }
 
+        // Color pictures drawn without the game (CostumeRender; user 2026-10-23: "automate the screenshots/images inside the
+        // costume packs"): the costume in the stance as SF4 Ember's gallery pictures are made, lit like the training stage,
+        // a second or two a color and nothing to start. files: the costume's, by what follows its prefix. Null when it
+        // can't be drawn (the reason said): the game makes the pictures then.
+        static SortedDictionary<int, Bitmap> Drawn(string game, string stem, Func<Dictionary<string, byte[]>> files, IList<int> colors, Action<string> say, bool fullSize)
+        {
+            var pictures = new SortedDictionary<int, Bitmap>();
+            try
+            {
+                var have = files();
+                var costume = new CostumeRender.Costume(game, stem, name => { byte[] b; return have.TryGetValue(name.Substring(stem.Length), out b) ? b : null; });
+                int done = 0;
+                foreach (int color in colors)
+                {
+                    say("Color " + color + (colors.Count > 1 ? " (" + ++done + " of " + colors.Count + ")" : "") + ": drawing it...");
+                    using (Bitmap layer = costume.Draw(color, fullSize ? 600 : 450, fullSize ? 800 : 600))
+                    {
+                        if (layer == null) throw new InvalidDataException("color " + color + " has no textures");
+                        Rectangle crop = DrawnBounds(layer);
+                        pictures[color] = fullSize ? FullSizeOf(layer, crop) : CutoutOf(layer, crop);
+                    }
+                }
+                return pictures;
+            }
+            catch (Exception ex)
+            {
+                foreach (Bitmap p in pictures.Values) p.Dispose();
+                say("It couldn't be drawn (" + ex.Message + "); the game makes the pictures instead.");
+                return null;
+            }
+        }
+
+        /// <summary>Color packs drawn: each the costume's files with the pack's as color 1. Null when one can't be.</summary>
+        internal static SortedDictionary<int, Bitmap> DrawnPacks(string game, IList<Installed> packs, Action<string> say, bool fullSize)
+        {
+            var drawn = new SortedDictionary<int, Bitmap>();
+            foreach (Installed pack in packs)
+            {
+                Item item = pack.Item;
+                var one = Drawn(game, item.Fighter + "_" + item.Slot.ToString("D2"), () =>
+                {
+                    var files = Read(CostumeSwaps.CostumeFiles(game, item.Fighter, item.Slot));
+                    foreach (var part in UnpackColor(pack.Package, item)) files["_01" + part.Key] = part.Value;
+                    return files;
+                }, new[] { 1 }, text => say(text.Replace("Color 1", "Color " + item.Color)), fullSize);
+                if (one == null) { foreach (Bitmap p in drawn.Values) p.Dispose(); return null; }
+                drawn[item.Color] = one[1];
+            }
+            return drawn;
+        }
+
+        static Dictionary<string, byte[]> Read(Dictionary<string, string> paths)
+        {
+            return paths.ToDictionary(p => p.Key, p => File.ReadAllBytes(p.Value), StringComparer.OrdinalIgnoreCase);
+        }
+
+        // everything drawn (one fighter, framed by the renderer)
+        static Rectangle DrawnBounds(Bitmap layer)
+        {
+            int left = layer.Width, top = layer.Height, right = -1, bottom = -1;
+            var data = layer.LockBits(new Rectangle(0, 0, layer.Width, layer.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            var row = new int[layer.Width];
+            for (int y = 0; y < layer.Height; y++)
+            {
+                System.Runtime.InteropServices.Marshal.Copy(data.Scan0 + y * data.Stride, row, 0, layer.Width);
+                for (int x = 0; x < layer.Width; x++)
+                    if (((row[x] >> 24) & 0xFF) > 16) { left = Math.Min(left, x); right = Math.Max(right, x); top = Math.Min(top, y); bottom = Math.Max(bottom, y); }
+            }
+            layer.UnlockBits(data);
+            if (right < 0) throw new InvalidDataException("nothing was drawn");
+            return new Rectangle(left, top, right - left + 1, bottom - top + 1);
+        }
+
         // Between one color picture's run of the game and the next (user 2026-10-22: "add a 3 second delay to subsequent
         // color creations IF their game has trouble running"): 3 seconds for the PC to settle when its PC check is under
         // SlowPc or under (user: "struggling should be 250 or lower"; a steady PC is ~300: 295-299), or it has none yet.
@@ -432,6 +508,8 @@ namespace ExMoreStuff
         // each; Begin and Recover around each put the Original (and a swap of the player's) back.
         public static SortedDictionary<int, Bitmap> PackPictures(string game, IList<Installed> packs, Action<string> say, bool fullSize = false)
         {
+            var drawn = DrawnPacks(game, packs, say, fullSize);
+            if (drawn != null) return drawn;
             string blocked = Blocked();
             if (blocked != null) throw new InvalidOperationException(blocked);
             var pictures = new SortedDictionary<int, Bitmap>();
@@ -471,6 +549,23 @@ namespace ExMoreStuff
             finally { try { if (Directory.Exists(unpacked)) Directory.Delete(unpacked, true); } catch (Exception) { } }
         }
 
+        // a color pack's texture and its material (<prefix>.col.emb, <prefix>.obj.emm when it has one) in its zip, by what follows
+        // the prefix
+        static Dictionary<string, byte[]> UnpackColor(string zipPath, Item item)
+        {
+            var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(zipPath))
+                foreach (string part in new[] { ".col.emb", ".obj.emm" })
+                {
+                    var entry = zip.Entries.FirstOrDefault(e => e.Name.Equals(item.Prefix + part, StringComparison.OrdinalIgnoreCase));
+                    if (entry == null) continue;
+                    using (Stream s = entry.Open())
+                    using (var to = new MemoryStream()) { s.CopyTo(to); files[part] = to.ToArray(); }
+                }
+            if (!files.ContainsKey(".col.emb")) throw new InvalidDataException(item.Prefix + ".col.emb isn't in its zip");
+            return files;
+        }
+
         // a color pack's texture and its material (<prefix>.col.emb, <prefix>.obj.emm when it has one) out of its zip into
         // `folder` (emptied first), by what follows the prefix
         static Dictionary<string, string> UnpackColor(string zipPath, Item item, string folder)
@@ -478,17 +573,12 @@ namespace ExMoreStuff
             if (Directory.Exists(folder)) Directory.Delete(folder, true);
             Directory.CreateDirectory(folder);
             var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            using (var zip = System.IO.Compression.ZipFile.OpenRead(zipPath))
-                foreach (string part in new[] { ".col.emb", ".obj.emm" })
-                {
-                    var entry = zip.Entries.FirstOrDefault(e => e.Name.Equals(item.Prefix + part, StringComparison.OrdinalIgnoreCase));
-                    if (entry == null) continue;
-                    string path = Path.Combine(folder, entry.Name);
-                    using (Stream s = entry.Open())
-                    using (Stream to = File.Create(path)) s.CopyTo(to);
-                    files[part] = path;
-                }
-            if (!files.ContainsKey(".col.emb")) throw new InvalidDataException(item.Prefix + ".col.emb isn't in its zip");
+            foreach (var part in UnpackColor(zipPath, item))
+            {
+                string path = Path.Combine(folder, item.Prefix + part.Key);
+                File.WriteAllBytes(path, part.Value);
+                files[part.Key] = path;
+            }
             return files;
         }
 
@@ -635,17 +725,29 @@ namespace ExMoreStuff
         {
             if (Directory.Exists(folder)) Directory.Delete(folder, true);
             Directory.CreateDirectory(folder);
+            var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var part in ZipCostume(zipPath, item))
+            {
+                string path = Path.Combine(folder, item.Prefix + part.Key);
+                File.WriteAllBytes(path, part.Value);
+                files[part.Key] = path;
+            }
+            return files;
+        }
+
+        // a costume's files in its zip, by what follows its prefix (".obj.emo", "_01.col.emb" ...)
+        static Dictionary<string, byte[]> ZipCostume(string zipPath, Item item)
+        {
             var part = new System.Text.RegularExpressions.Regex("^" + item.Prefix + @"(\.(obj\.emo|shd\.emo|nml\.emb|bsr|csb)|_\d\d\.(col\.emb|obj\.emm))$",
                                                                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
             using (var zip = System.IO.Compression.ZipFile.OpenRead(zipPath))
                 foreach (var entry in zip.Entries.Where(e => part.IsMatch(e.Name)))
                 {
-                    string rest = entry.Name.Substring(item.Prefix.Length), path = Path.Combine(folder, entry.Name);
+                    string rest = entry.Name.Substring(item.Prefix.Length);
                     if (files.ContainsKey(rest)) continue;
                     using (Stream s = entry.Open())
-                    using (Stream to = File.Create(path)) s.CopyTo(to);
-                    files[rest] = path;
+                    using (var to = new MemoryStream()) { s.CopyTo(to); files[rest] = to.ToArray(); }
                 }
             return files;
         }
@@ -671,12 +773,11 @@ namespace ExMoreStuff
         /// apart further right; fighters too close: up to the middle), standing at the bottom of a transparent 256 x 384.</summary>
         public static Bitmap Cutout(Bitmap shot)
         {
-            using (Bitmap layer = Solid(shot)) return CutoutOf(layer);
+            using (Bitmap layer = Solid(shot)) return CutoutOf(layer, P1(layer));
         }
 
-        static Bitmap CutoutOf(Bitmap layer)
+        static Bitmap CutoutOf(Bitmap layer, Rectangle crop)
         {
-            Rectangle crop = P1(layer);
             double scale = Math.Min(PictureWidth * 0.92 / crop.Width, PictureHeight * 0.94 / crop.Height);
             int dw = Math.Max(1, (int)Math.Round(crop.Width * scale)), dh = Math.Max(1, (int)Math.Round(crop.Height * scale));
             var picture = new Bitmap(PictureWidth, PictureHeight, PixelFormat.Format32bppArgb);
@@ -696,12 +797,11 @@ namespace ExMoreStuff
         /// room around, transparent.</summary>
         public static Bitmap FullSize(Bitmap shot)
         {
-            using (Bitmap layer = Solid(shot)) return FullSizeOf(layer);
+            using (Bitmap layer = Solid(shot)) return FullSizeOf(layer, P1(layer));
         }
 
-        static Bitmap FullSizeOf(Bitmap layer)
+        static Bitmap FullSizeOf(Bitmap layer, Rectangle crop)
         {
-            Rectangle crop = P1(layer);
             const int room = 12;
             var picture = new Bitmap(crop.Width + room * 2, crop.Height + room * 2, PixelFormat.Format32bppArgb);
             using (Graphics g = Graphics.FromImage(picture))
