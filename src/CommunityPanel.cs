@@ -245,6 +245,23 @@ namespace ExMoreStuff
         // What an install or update said goes (not while one runs); how GameBanana answered stays.
         void ClearSaid() { if (!working) Say(standing ?? "", standing != null); }
 
+        /// <summary>A GameBanana 1-Click link's mod (OneClick): its card shown and installed as its Install button does it
+        /// (updated when a newer one's out; nothing when it's in already). A mod not in the list read yet: the list read again.</summary>
+        public async Task InstallFromLink(long id)
+        {
+            while (loading) await Task.Delay(200);
+            if (!loaded) await Load();
+            GameBanana.Mod mod = mods == null ? null : mods.FirstOrDefault(m => m.Id == id);
+            if (mod == null && mods != null) { await Load(true); mod = mods == null ? null : mods.FirstOrDefault(m => m.Id == id); }   // a new upload
+            if (mod == null) { Say("That mod isn't one EX More Stuff can install yet. Try again in a few minutes", true); return; }
+            string key = "gamebanana:" + mod.Id + ":";
+            Highlight(key);
+            Recount();
+            if (installedKeys.Contains(key) && !outdated.Contains(key)) { Say(mod.Name + " is already installed"); return; }
+            if (Wanted(mod).Count == 0) { Say(mod.Name + ": GameBanana is still checking its file. Try again in a few minutes", true); return; }
+            if (await Install(mod)) Fill();
+        }
+
         /// <summary>Shows a mod's card (its key: "gamebanana:123:"), lit up for a moment.</summary>
         public void Highlight(string key)
         {
@@ -606,13 +623,17 @@ namespace ExMoreStuff
                 bool current = inGame != null && !outdated.Contains(entry.Key);
                 // a skin that changes its fighter's moves too: not installed, and the card says why (user 2026-10-13)
                 string moves = inGame == null && !SkinImport.AllowMoveMods ? SkinImport.ChangesMoves(Wanted(entry.Mod).SelectMany(f => f.Contents)) : null;
+                // pulled for now (the catalog's list, user 2026-10-22): not installed, and the card says why
+                string pulledWhy = inGame == null ? Catalog.PulledWhy(entry.Mod.Id) : null;
+                if (pulledWhy != null) moves = "";
                 // a new file GameBanana is still checking (user 2026-10-13: an update showed greyed out): the card says so
                 bool checking = moves == null && entry.Mod.Files.Any(f => f.Waiting);
                 var card = new ModCard(entry.Mod.Name, entry.Mod.Author, entry.Mod.Page, entry.Mod.Downloads.ToString("N0") + (entry.Mod.Downloads == 1 ? " download" : " downloads"),
                                        moves != null ? null : Where(entry.Mod), inGame != null ? string.Join(", ", inGame.Into) : null, inGame != null && !current)
-                           { Margin = new Padding(6), Why = moves != null ? "Compatibility issue" : checking ? (inGame != null ? string.Join(", ", inGame.Into) + "   ·   " : "") +
+                           { Margin = new Padding(6), Why = pulledWhy != null ? "Switched off for now" : moves != null ? "Compatibility issue" : checking ? (inGame != null ? string.Join(", ", inGame.Into) + "   ·   " : "") +
                                                                                                                   "GameBanana is checking a new file" : null,
-                             WhyDetail = moves != null ? char.ToUpperInvariant(moves[0]) + moves.Substring(1) + " in every costume of that fighter, and online that's a desync. " +
+                             WhyDetail = pulledWhy != null ? char.ToUpperInvariant(pulledWhy[0]) + pulledWhy.Substring(1) + "."
+                                       : moves != null ? char.ToUpperInvariant(moves[0]) + moves.Substring(1) + " in every costume of that fighter, and online that's a desync. " +
                                                          "Its model may need them, so as a costume it would crash."
                                        : checking ? "GameBanana checks every new file for viruses before EX More Stuff offers it.\nIt usually takes a few minutes: press Refresh then." : null };
                 var mod = entry.Mod;
@@ -702,6 +723,8 @@ namespace ExMoreStuff
         // GameBanana's picture server dropped some of a whole page's pictures asked for at once)
         static readonly System.Threading.SemaphoreSlim fetching = new System.Threading.SemaphoreSlim(6);
 
+        const int CardPictureSide = 640;   // a card's picture at twice the size it's shown, for high-DPI screens
+
         static async Task<Image> Picture(string url)
         {
             byte[] bytes = null;
@@ -714,7 +737,7 @@ namespace ExMoreStuff
                 finally { fetching.Release(); }
             }
             if (bytes == null) return null;
-            try { return await Task.Run(() => Pictures.Read(bytes)); }
+            try { return await Task.Run(() => Pictures.Smaller(Pictures.Read(bytes), CardPictureSide)); }   // kept at card size
             catch (Exception) { return null; }   // not a picture EX More Stuff can read
         }
 
@@ -745,6 +768,8 @@ namespace ExMoreStuff
             bool song = IsSong(mod);   // a song mod: nothing goes in the game, so it may be open, and no PC check
             string blocked = song ? (Blocked != null ? Blocked() : null) : CantInstall();
             if (blocked != null) { Say("Can't install it now: " + blocked, true); return false; }
+            string pulled = Catalog.PulledWhy(mod.Id);   // pulled for now (the catalog's list)
+            if (pulled != null) { Say(mod.Name + " is switched off for now: " + pulled, true); return false; }
             string tooNew = Overrides.TooNew(Wanted(mod).SelectMany(f => f.Contents));   // made for a newer EX More Stuff
             if (tooNew != null) { Say(mod.Name + " " + tooNew, true); return false; }
             string moves = SkinImport.ChangesMoves(Wanted(mod).SelectMany(f => f.Contents));

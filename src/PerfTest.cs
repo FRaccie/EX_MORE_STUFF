@@ -389,8 +389,10 @@ namespace ExMoreStuff
                 else CostumeSwaps.Replace(game, fighter, 1, item.Slot);
                 string shot = AppFolders.DataFile("color_picture.png");
                 int done = 0;
-                foreach (int color in colors.Where(c => c >= 1 && c <= ColorCount).Distinct().OrderBy(c => c))
+                var making = colors.Where(c => c >= 1 && c <= ColorCount).Distinct().OrderBy(c => c).ToList();
+                foreach (int color in making)
                 {
+                    if (color != making[0]) Breather();
                     say("Color " + color + (colors.Count > 1 ? " (" + ++done + " of " + colors.Count + ")" : "") + ": the game opens for a few seconds and closes by itself...");
                     if (File.Exists(shot)) File.Delete(shot);
                     RunGame(game, FightLines(new[] { id, other, 0 }) + TrainingMode + "patch=26C88:00>" + (color - 1).ToString("X2") + "\r\n" +
@@ -413,6 +415,17 @@ namespace ExMoreStuff
             }
         }
 
+        // Between one color picture's run of the game and the next (user 2026-10-22: "add a 3 second delay to subsequent
+        // color creations IF their game has trouble running"): 3 seconds for the PC to settle when its PC check is under
+        // SlowPc or under (user: "struggling should be 250 or lower"; a steady PC is ~300: 295-299), or it has none yet.
+        const double SlowPc = 250;
+
+        static void Breather()
+        {
+            double? pc = PcResult();
+            if (pc == null || pc.Value <= SlowPc) System.Threading.Thread.Sleep(3000);
+        }
+
         // Color pack pictures (user 2026-10-18: "where do i go to generate the colors for this?"): a new color (30-99)
         // can't be picked in the benchmark's fight, so for each its costume's files (as the game has them) play as P1's
         // Original with the pack's texture as color 1, and color 1 is pictured as ColorPictures does. A run of the game
@@ -429,6 +442,7 @@ namespace ExMoreStuff
                 foreach (Installed pack in packs)
                 {
                     Item item = pack.Item;
+                    if (pack != packs[0]) Breather();
                     say("Color " + item.Color + (packs.Count > 1 ? " (" + ++done + " of " + packs.Count + ")" : "") + ": the game opens for a few seconds and closes by itself...");
                     int id = Array.IndexOf(Fighters.Codes, item.Fighter), other = id == 0 ? 1 : 0;
                     if (File.Exists(shot)) File.Delete(shot);

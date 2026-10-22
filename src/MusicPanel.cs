@@ -169,8 +169,14 @@ namespace ExMoreStuff
             }
             wave.Changed += LoopChanged;
             wave.CursorMoved += () => { if (player.Playing) Play(wave.CursorFrame, loop.Checked); ShowClock(); };
-            timer.Tick += (s, e) => { wave.Playhead = player.Playing ? player.Position : -1; ShowClock(); };
-            timer.Start();
+            // the playhead and clock follow the song only while it plays (user 2026-10-22: nothing ticking when idle)
+            timer.Tick += (s, e) =>
+            {
+                bool playing = player.Playing;
+                wave.Playhead = playing ? player.Position : -1;
+                ShowClock();
+                if (!playing) timer.Stop();   // its last step drawn: stopped
+            };
 
             tips.SetToolTip(openSong, "A WAV, MP3, FLAC, M4A or WMA file, or a game music file (.csb). A song from your songs folder opens with its loop and settings");
             tips.SetToolTip(openSfxt, "Music from your Street Fighter X Tekken: its stages' themes and the rest, each with its own loop (read from the game, never changed)");
@@ -857,7 +863,7 @@ namespace ExMoreStuff
         {
             if (song == null) return;
             player.Volume = Loudness();
-            try { player.Play(Preview(bassPreview.Checked), from, looping, wave.LoopStart, wave.LoopEnd); }
+            try { player.Play(Preview(bassPreview.Checked), from, looping, wave.LoopStart, wave.LoopEnd); timer.Start(); }
             catch (Exception ex) { Say(ex.Message, true); }
         }
 

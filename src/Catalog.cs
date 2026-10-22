@@ -148,6 +148,21 @@ namespace ExMoreStuff
             catch (Exception) { return false; }
         }
 
+        // Mods pulled for now (user 2026-10-22: a costume causing desyncs online, "remove it from players ability to enable it
+        // until further notice"): "pulled": [{ "mod": 729472, "why": "..." }] in the catalog, a GameBanana mod's id each.
+        // EX More Stuff switches them off (kept, to come back) and won't put them in while they're on the list.
+        public static Dictionary<long, string> Pulled = new Dictionary<long, string>();
+
+        /// <summary>Why a mod is pulled for now (its GameBanana id), or null.</summary>
+        public static string PulledWhy(long mod) { string why; return Pulled.TryGetValue(mod, out why) ? why : null; }
+
+        /// <summary>Why an item is pulled for now (one made from a pulled GameBanana mod), or null.</summary>
+        public static string PulledWhy(Item item)
+        {
+            Match m = Regex.Match(item.Id ?? "", @"^gamebanana:(-?\d+):");
+            return m.Success ? PulledWhy(long.Parse(m.Groups[1].Value)) : null;
+        }
+
         public static async Task<List<Item>> Load(string source)
         {
             var json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
@@ -165,6 +180,19 @@ namespace ExMoreStuff
                 string download = about.ContainsKey("download") ? Convert.ToString(about["download"]) : null;
                 ProgramDownload = download != null && download.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? download
                                 : ProgramPage.TrimEnd('/') + "/download/v" + version + "/EXMoreStuff-" + version + ".zip";
+            }
+            object pulled;
+            if (root != null && root.TryGetValue("pulled", out pulled) && pulled is System.Collections.ArrayList)
+            {
+                var now = new Dictionary<long, string>();
+                foreach (object entry in (System.Collections.ArrayList)pulled)
+                {
+                    var p = entry as Dictionary<string, object>;
+                    long mod;
+                    if (p != null && p.ContainsKey("mod") && long.TryParse(Convert.ToString(p["mod"]), out mod))
+                        now[mod] = p.ContainsKey("why") && !string.IsNullOrWhiteSpace(Convert.ToString(p["why"])) ? Convert.ToString(p["why"]).Trim() : "it's pulled for now";
+                }
+                Pulled = now;
             }
             if (root != null && root.TryGetValue("items", out list) && list is System.Collections.ArrayList)
                 foreach (object entry in (System.Collections.ArrayList)list)

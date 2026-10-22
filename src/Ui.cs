@@ -1274,9 +1274,21 @@ namespace ExMoreStuff
                 bool now = Environment.TickCount % Cycle < Sweep;
                 if (!now && !sweeping) return;
                 sweeping = now;
-                foreach (GoldName name in shown) if (name.Visible) name.Invalidate();
+                // only the names on screen (user 2026-10-22: Browse Mods' hundreds of cards were all drawn again 33 times a
+                // second during a sweep, the ones scrolled out of sight too)
+                foreach (GoldName name in shown) if (name.Visible && OnScreen(name)) name.Invalidate();
             };
             timer.Start();
+        }
+
+        // whether any of it shows: inside every parent's visible area, its window not minimized
+        static bool OnScreen(Control c)
+        {
+            Form form = c.FindForm();
+            if (form == null || form.WindowState == FormWindowState.Minimized || !form.Visible) return false;
+            Rectangle seen = c.RectangleToScreen(c.ClientRectangle);
+            for (Control p = c.Parent; p != null && !seen.IsEmpty; p = p.Parent) seen.Intersect(p.RectangleToScreen(p.ClientRectangle));
+            return !seen.IsEmpty;
         }
 
         public GoldName(string text) : this(text, 11.5f, 24) { }

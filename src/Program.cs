@@ -23,11 +23,15 @@ namespace ExMoreStuff
         {
             // a command (--dock, --free-codes ...): done without the window (Cli)
             if (args.Length > 0 && args.Any(a => a.StartsWith("--"))) { Environment.Exit(Cli.Run(args)); return; }
+            // a GameBanana 1-Click link (OneClick): to the window that's open, or this one opens with it
+            string link = args.FirstOrDefault(a => a.StartsWith(OneClick.Scheme + ":", StringComparison.OrdinalIgnoreCase));
             // One window at a time: starting it again brings the open one to the front.
             bool first;
             using (var single = new Mutex(true, @"Local\EXMoreStuff", out first))
             {
-                if (!first) { ShowOpenWindow(); return; }
+                if (!first) { if (link != null) OneClick.Pass(link); ShowOpenWindow(); return; }
+                OneClick.Pending = link;
+                OneClick.Register();   // exms: links open this exe, wherever it is now
                 ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);

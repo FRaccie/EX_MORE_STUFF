@@ -301,7 +301,56 @@ namespace ExMoreStuff
             catch (Exception ex) { catalog = new List<Item>(); catalogProblem = ex.Message; }
             ShowProgramUpdate();
             Reload();
+            await TakeOutPulled();
             communityPage.CheckForUpdates();   // GameBanana's list, read in the background: updates for installed mods
+            // GameBanana 1-Click links (OneClick): the one it was started with, and any handed over while it's open
+            WatchLinks();
+            string link = OneClick.Pending ?? OneClick.Take();
+            OneClick.Pending = null;
+            if (link != null) await OpenLink(link);
+        }
+
+        // mods pulled for now (Catalog.Pulled): out of the game, switched off and kept to come back, said once; with the game
+        // open, at the next start
+        async Task TakeOutPulled()
+        {
+            if (!Game.IsGameFolder(game) || Game.IsRunning()) return;
+            var pulled = installed.Where(r => Catalog.PulledWhy(r.Item) != null).ToList();
+            if (pulled.Count == 0) return;
+            string g = game;
+            var said = new List<string>();
+            foreach (Installed r in pulled)
+                try { await Task.Run(() => Installer.Remove(g, r.Item.Key)); said.Add(Weight.Name(r) + " is switched off for now: " + Catalog.PulledWhy(r.Item)); }
+                catch (Exception) { }
+            ReloadKeeping(null);
+            if (said.Count > 0) MessageBox.Show(this, string.Join("\n\n", said.Distinct()), Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        FileSystemWatcher links;
+
+        void WatchLinks()
+        {
+            try
+            {
+                links = new FileSystemWatcher(AppFolders.Root, OneClick.InboxName) { NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite };
+                FileSystemEventHandler handed = (s, e) => BeginInvoke((Action)(async () => { string l = OneClick.Take(); if (l != null) await OpenLink(l); }));
+                links.Created += handed;
+                links.Changed += handed;
+                links.Renamed += (s, e) => handed(s, e);
+                links.EnableRaisingEvents = true;
+            }
+            catch (Exception) { }
+        }
+
+        // a 1-Click link: Browse Mods, its mod installed as its card's Install does
+        async Task OpenLink(string link)
+        {
+            long id; string file;
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            Activate();
+            if (!OneClick.Parse(link, out id, out file)) { UpdateStatus("That link isn't one EX More Stuff can open"); return; }
+            ShowTab(communityTab);
+            await communityPage.InstallFromLink(id);
         }
 
         // packages' zips into their places in the Mods folder: from before it (once; it may take a moment for big zips),
@@ -1114,8 +1163,14 @@ namespace ExMoreStuff
                     communityPage.CreatorChanged(gb, on);
                 };
             }
-            string locked = PerfTest.Locked(item);
-            if (locked != null)
+            string locked = PerfTest.Locked(item), pulledWhy = Catalog.PulledWhy(item);
+            if (pulledWhy != null)
+            {
+                // pulled for now (the catalog's list, user 2026-10-22): off, and it can't be switched on until it's off the list
+                card.Use.Enabled = false;
+                card.Warning.SetMessage(Weight.Name(record ?? off ?? new Installed { Item = item }) + " is switched off for now: " + pulledWhy);
+            }
+            else if (locked != null)
             {
                 // it had a size warning and failed its test on this PC: off, and it can't be switched on (user)
                 card.Use.Enabled = false;
@@ -1733,6 +1788,7 @@ namespace ExMoreStuff
             foreach (Item item in changes)
             {
                 done++;
+                if (Wanted(item) && Catalog.PulledWhy(item) != null) { problems.Add(Describe(item) + " is switched off for now: " + Catalog.PulledWhy(item)); continue; }
                 try
                 {
                     if (!Wanted(item))

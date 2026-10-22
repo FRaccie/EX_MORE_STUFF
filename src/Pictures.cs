@@ -67,6 +67,24 @@ namespace ExMoreStuff
             return Png(bytes, longest) ?? bytes;
         }
 
+        /// <summary>A picture for showing small (a card): made smaller when its long side is over `longest`, the big one
+        /// let go (user 2026-10-22, the resource check: Browse Mods kept every picture at its full size, ~150 MB).</summary>
+        public static Image Smaller(Image image, int longest)
+        {
+            if (image == null || Math.Max(image.Width, image.Height) <= longest) return image;
+            int side = Math.Max(image.Width, image.Height);
+            int w = Math.Max(1, image.Width * longest / side), h = Math.Max(1, image.Height * longest / side);
+            var small = new Bitmap(w, h, PixelFormat.Format32bppPArgb);   // premultiplied: the quickest to draw
+            using (Graphics g = Graphics.FromImage(small))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                g.DrawImage(image, 0, 0, w, h);
+            }
+            image.Dispose();
+            return small;
+        }
+
         /// <summary>The longest side of a mod's own picture in a package (its card shows it small).</summary>
         public const int PackageSide = 512;
 
