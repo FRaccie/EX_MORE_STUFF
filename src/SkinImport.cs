@@ -170,7 +170,7 @@ namespace ExMoreStuff
                 .Where(t => Fighters.IsCode(t.Item1) && t.Item2 >= 1 && t.Item2 <= Catalog.LastSlot).Distinct();
         }
 
-        static string GameFile(string game, string fighter, string name)
+        internal static string GameFile(string game, string fighter, string name)
         {
             foreach (string root in GameRoots)
             {

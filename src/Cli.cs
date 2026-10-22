@@ -14,6 +14,11 @@ namespace ExMoreStuff
     //   --free-codes <FIGHTER>               the shared slots nobody holds (Advanced > Free codes)
     //   --set-code "<docked zip>" <slot>     the docked package moved to another slot (or stage code), its zip rewritten
     //   --color-pictures "<docked zip>" [1,2,5-10]   color pictures into the zip (the game runs; refused while it's open)
+    //   --check-costumes [<folder or zip> ...] [--report "<file.txt>"]   the costume check (CostumeCheck): what breaks in
+    //                                        the game or desyncs online; default the costumes in the game's patch_ae2_tu3
+    //                                        and in Mods. The report, a text file to look into, with --report
+    //   --fix-costume "<folder or zip>"      a fixed copy beside it ("... - fixed"): locators set to the stand-in's,
+    //                                        materials put right, missing parts from the game; then checked again
     // and before the command:
     //   --data "<folder>"    EX More Stuff's own files (docked list, GameBanana list, built zips) there, not beside the
     //                        program, so these runs don't show in the player's EX More Stuff
@@ -36,7 +41,7 @@ namespace ExMoreStuff
             int code;
             try
             {
-                string data = null, game = null, command = null;
+                string data = null, game = null, command = null, reportFile = null;
                 var rest = new List<string>();
                 for (int i = 0; i < args.Length; i++)
                 {
@@ -45,10 +50,11 @@ namespace ExMoreStuff
                     if (a == "--data") data = next();
                     else if (a == "--game") game = next();
                     else if (a == "--result") resultFile = next();
+                    else if (a == "--report") reportFile = next();
                     else if (command == null && a.StartsWith("--")) command = a;
                     else rest.Add(a);
                 }
-                if (command == null) throw new Usage("no command (--dock, --free-codes, --set-code, --color-pictures)");
+                if (command == null) throw new Usage("no command (--dock, --free-codes, --set-code, --color-pictures, --check-costumes, --fix-costume)");
                 game = game ?? Settings.GameFolder;   // the player's settings, read before --data moves EX More Stuff's files
                 if (data != null)
                 {
@@ -67,6 +73,8 @@ namespace ExMoreStuff
                         if (rest.Count < 1) throw new Usage("--color-pictures \"<docked zip>\" [colors, e.g. 1,2,5-10]");
                         ColorPictures(NeedGame(game), rest[0], rest.Count > 1 ? rest[1] : null, say, answer);
                         break;
+                    case "--check-costumes": CheckCostumes(NeedGame(game), rest, reportFile, answer); break;
+                    case "--fix-costume": Need(rest, 1, "--fix-costume \"<folder or zip>\""); FixCostume(NeedGame(game), rest[0], reportFile, answer); break;
                     default: throw new Usage("unknown command " + command);
                 }
                 answer.Insert(0, "ok");
@@ -120,6 +128,29 @@ namespace ExMoreStuff
             foreach (string p in problems) answer.Add("problem=" + p);
             if (made.Count == 0) throw new InvalidOperationException(problems.Count > 0 ? string.Join("; ", problems) : "nothing could be docked (docked already?)");
             foreach (Installed r in made) Package(answer, r);
+        }
+
+        // the costume check: a line per costume (name=verdict), the report written with --report
+        static void CheckCostumes(string game, List<string> paths, string reportFile, List<string> answer)
+        {
+            if (paths.Count == 0) paths = new List<string> { Path.Combine(Game.PatchFolder(game), "battle", "chara"), AppFolders.Mods };
+            var results = paths.Where(p => File.Exists(p) || Directory.Exists(p)).SelectMany(CostumeCheck.Find).SelectMany(s => CostumeCheck.Check(game, s)).ToList();
+            foreach (var r in results) answer.Add(r.Name + "=" + r.Verdict.ToString().ToUpperInvariant() + " " + r.Where);
+            answer.Add("faulty=" + results.Count(r => r.Verdict == CostumeCheck.Verdict.Faulty));
+            if (reportFile != null) { File.WriteAllText(reportFile, CostumeCheck.Report(game, results)); answer.Add("report=" + Path.GetFullPath(reportFile)); }
+        }
+
+        static void FixCostume(string game, string path, string reportFile, List<string> answer)
+        {
+            var sources = CostumeCheck.Find(Path.GetFullPath(path));
+            if (sources.Count != 1) throw new InvalidOperationException(sources.Count == 0 ? "no costume (CHR_NN.obj.emo) at " + path : "more than one folder or zip at " + path + ": give one");
+            var done = new List<string>();
+            string fixedCopy = CostumeCheck.Fix(game, sources[0], done);
+            foreach (string d in done) answer.Add("done=" + d);
+            answer.Add("fixed=" + fixedCopy);
+            var results = CostumeCheck.Find(fixedCopy).SelectMany(s => CostumeCheck.Check(game, s)).ToList();
+            foreach (var r in results) answer.Add(r.Name + "=" + r.Verdict.ToString().ToUpperInvariant());
+            if (reportFile != null) { File.WriteAllText(reportFile, CostumeCheck.Report(game, results)); answer.Add("report=" + Path.GetFullPath(reportFile)); }
         }
 
         // Advanced > Free codes: the shared slots no GameBanana mod holds
