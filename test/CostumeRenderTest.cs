@@ -1,5 +1,9 @@
 // The costume renderer against the Python renderer it is ported from (usf4-nesica tools). Modes:
-//   pose <game> <folder> <CHR_NN> <python dump.txt>   the posed mesh, vertex by vertex, against dump_pose.py's
+//   pose <game> <folder> <CHR_NN> <python dump.txt> [<animation> <frame> [2p]]   the posed mesh, vertex by vertex,
+//        against dump_pose.py's (same arguments)
+//   animations <game> <CHR>   the fighter's animations: name and frame count
+//   viewer <game> <folder> <CHR_NN> <out prefix>   the View... window off screen: <prefix>-1.png as it opens, <prefix>-2.png
+//        after color 12, crouch frame 10, turned 180, 2P (set as its controls would)
 //   draw <game> <folder> <CHR_NN> <color> <out.png> [<python picture.png>]   a picture (600 x 800), and how far it is
 //        from the Python renderer's: mean and 99th percentile of the per-pixel difference (0-255), coverage
 //   pack <game> <work folder>   a color pack (Ryu's costume 1, color 31 made of the game's color 5) drawn as the
@@ -14,13 +18,49 @@ namespace ExMoreStuff
 {
     static class CostumeRenderTest
     {
+        [STAThread]
         static int Main(string[] args)
         {
-            if (args[0] == "pose") return Pose(args[1], args[2], args[3], args[4]);
+            if (args[0] == "pose") return Pose(args[1], args[2], args[3], args[4], args.Length > 5 ? int.Parse(args[5]) : 0, args.Length > 6 ? double.Parse(args[6], System.Globalization.CultureInfo.InvariantCulture) : 0, args.Length <= 7 || args[7] != "2p");
+            if (args[0] == "animations") { foreach (var a in CostumePose.Animations(File.ReadAllBytes(CostumePose.GameFile(args[1], args[2], args[2] + ".obj.ema")))) Console.WriteLine(a.Key + " " + a.Value); return 0; }
             if (args[0] == "pack") return Pack(args[1], args[2]);
+            if (args[0] == "viewer") return Viewer(args[1], args[2], args[3], args[4]);
             if (args[0] == "draw") return Draw(args[1], args[2], args[3], int.Parse(args[4]), args[5], args.Length > 6 ? args[6] : null);
             Console.WriteLine("unknown mode");
             return 2;
+        }
+
+        static int Viewer(string game, string folder, string stem, string prefix)
+        {
+            System.Windows.Forms.Application.EnableVisualStyles();
+            var viewer = new CostumeViewer(game, stem, stem + " (test)", () => new CostumeRender.Costume(game, stem, name => File.Exists(Path.Combine(folder, name)) ? File.ReadAllBytes(Path.Combine(folder, name)) : null))
+            { StartPosition = System.Windows.Forms.FormStartPosition.Manual, Location = new System.Drawing.Point(-4000, -4000) };
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            Func<string, object> field = n => typeof(CostumeViewer).GetField(n, flags).GetValue(viewer);
+            var info = (System.Windows.Forms.Label)field("info");
+            int step = 0, code = 1;
+            var timer = new System.Windows.Forms.Timer { Interval = 200 };
+            timer.Tick += (s, e) =>
+            {
+                if (info.Text.StartsWith("It ")) { Console.WriteLine("FAIL  " + info.Text); timer.Stop(); viewer.Close(); return; }
+                if (!info.Text.Contains("drawn in") || (bool)field("busy")) return;
+                using (var shot = new System.Drawing.Bitmap(viewer.Width, viewer.Height))
+                {
+                    viewer.DrawToBitmap(shot, new System.Drawing.Rectangle(0, 0, viewer.Width, viewer.Height));
+                    shot.Save(prefix + "-" + (step + 1) + ".png");
+                }
+                Console.WriteLine("ok    " + info.Text);
+                if (step++ == 1) { code = 0; timer.Stop(); viewer.Close(); return; }
+                typeof(CostumeViewer).GetField("color", flags).SetValue(viewer, 12);
+                typeof(CostumeViewer).GetField("mirror", flags).SetValue(viewer, false);
+                ((System.Windows.Forms.ComboBox)field("stance")).SelectedIndex = 1;
+                ((ValueSlider)field("frame")).Value = 10;
+                ((ValueSlider)field("turn")).Value = 180;
+                info.Text = "";
+            };
+            viewer.Shown += (s, e) => timer.Start();
+            System.Windows.Forms.Application.Run(viewer);
+            return code;
         }
 
         static int Pack(string game, string work)
@@ -69,13 +109,13 @@ namespace ExMoreStuff
         }
 
         // largest position and normal differences per part, and the kept triangles per submesh, against Python's dump
-        static int Pose(string game, string folder, string stem, string dump)
+        static int Pose(string game, string folder, string stem, string dump, int animation, double frame, bool mirror)
         {
             string fighter = stem.Substring(0, 3);
             string bsr = Path.Combine(folder, stem + ".bsr");
             var parts = CostumePose.Posed(File.ReadAllBytes(Path.Combine(folder, stem + ".obj.emo")),
                                           File.ReadAllBytes(CostumePose.GameFile(game, fighter, fighter + ".obj.ema")),
-                                          File.Exists(bsr) ? File.ReadAllBytes(bsr) : null, fighter);
+                                          File.Exists(bsr) ? File.ReadAllBytes(bsr) : null, fighter, animation, frame, mirror);
             var lines = File.ReadAllLines(dump);
             int at = 0, bad = 0;
             double worstP = 0, worstN = 0;

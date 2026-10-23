@@ -153,6 +153,7 @@ namespace ExMoreStuff
                 row.Make.Click += async (s, e) => await Make(r, row.Colors);
                 row.FullSizeAsked += async color => await MakeFullSize(r, color);
                 row.Check.Click += async (s, e) => await RunCheck(() => CostumeCheck.Find(r.Package), Weight.Name(r));
+                row.View.Click += (s, e) => View(r);
                 row.ForceAsked += async color => await ForceDebug(r, color);
                 row.Busy = working;
                 rows.Add(row);
@@ -207,6 +208,14 @@ namespace ExMoreStuff
             status.Text = text;
             status.ForeColor = problem ? Theme.Warning : Theme.Text;
             if (problem) BugReport.Noted(text);
+        }
+
+        // the costume's renders in any color, pose and turn (CostumeViewer)
+        void View(Installed record)
+        {
+            string g = game, docked = DockedZip(record);
+            using (var viewer = new CostumeViewer(g, record.Item.Fighter + "_" + record.Item.Slot.ToString("D2"), Weight.Name(record), () => PerfTest.Costume(g, record.Item, docked)))
+                viewer.ShowDialog(FindForm());
         }
 
         async Task Make(Installed record, List<int> colors)
@@ -478,6 +487,7 @@ namespace ExMoreStuff
     class CreationRow : Clear
     {
         public readonly FlatButton Make = new FlatButton("Make color pictures", true);
+        public readonly FlatButton View = new FlatButton("View...");   // a costume's renders (CostumeViewer); not for a pack's row
         readonly FlatButton all = new FlatButton("All");
         public readonly FlatButton Check = new FlatButton("Check");   // the costume check on its zip (CostumeCheckWindow); not for a pack's row
         public event Action<int> FullSizeAsked;   // a color's right-click menu: that color at the game's own size
@@ -502,13 +512,16 @@ namespace ExMoreStuff
             all.Size = new Size(Make.Width, 32);
             all.Location = new Point(Make.Left, Make.Bottom + 8);
             all.Click += (s, e) => { bool on = !picked.All(p => p); for (int i = 0; i < picked.Length; i++) picked[i] = on; Picked(); };
-            Check.Size = all.Size;
-            Check.Location = new Point(Make.Left, all.Bottom + 8);
-            Check.Visible = canForce;
+            // View... and Check side by side under All, as in the mockup
+            View.Size = Check.Size = new Size((all.Width - 8) / 2, all.Height);
+            View.Location = new Point(Make.Left, all.Bottom + 8);
+            Check.Location = new Point(View.Right + 8, all.Bottom + 8);
+            View.Visible = Check.Visible = canForce;
             int bottom = pictures.Length == 0 ? 64 : Cell(pictures.Length - 1).Bottom;
-            Size = new Size(width - 16, Math.Max(bottom + 14, (canForce ? Check : all).Bottom + 14));
+            Size = new Size(width - 16, Math.Max(bottom + 14, (canForce ? View : all).Bottom + 14));
             Controls.Add(Make);
             Controls.Add(all);
+            Controls.Add(View);
             Controls.Add(Check);
         }
 

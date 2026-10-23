@@ -450,6 +450,14 @@ namespace ExMoreStuff
             }
         }
 
+        /// <summary>An installed custom costume (or a docked one: `docked`, its zip) ready to draw (CostumeViewer).</summary>
+        internal static CostumeRender.Costume Costume(string game, Item item, string docked)
+        {
+            string stem = item.Fighter + "_" + item.Slot.ToString("D2");
+            var have = docked != null ? ZipCostume(docked, item) : Read(CostumeSwaps.CostumeFiles(game, item.Fighter, item.Slot));
+            return new CostumeRender.Costume(game, stem, name => { byte[] b; return have.TryGetValue(name.Substring(stem.Length), out b) ? b : null; });
+        }
+
         /// <summary>Color packs drawn: each the costume's files with the pack's as color 1. Null when one can't be.</summary>
         internal static SortedDictionary<int, Bitmap> DrawnPacks(string game, IList<Installed> packs, Action<string> say, bool fullSize)
         {

@@ -25,7 +25,8 @@ namespace ExMoreStuff
     //   map in screen space (Hatching_PS).
     static class CostumeRender
     {
-        const double FieldOfView = 24.0, YawDegrees = 90.0;
+        const double FieldOfView = 24.0;
+        public const double YawDegrees = 90.0;   // character select's turn: the fighter faces the camera in the stance
         const int Supersample = 3, ShadowSize = 2048;
 
         // ---------- the training stage (STG_TRN.emz TRN_SetupParam.lua) ----------
@@ -443,10 +444,10 @@ namespace ExMoreStuff
         /// <summary>The posed costume in one color as the training stage lights it: an RGBA picture `width` x `height`,
         /// the fighter framed in it, transparent around them.</summary>
         static float[] Picture(string game, string fighter, List<CostumePose.Part> parts, List<Texture> textures, Dictionary<string, Material> materials,
-                               List<Texture> normals, Dictionary<string, int> layers, int width, int height, int style)
+                               List<Texture> normals, Dictionary<string, int> layers, int width, int height, int style, double yawDegrees)
         {
             Stage stage = StageOf(game);
-            double yaw = YawDegrees * Math.PI / 180, cy = Math.Cos(yaw), sy = Math.Sin(yaw);
+            double yaw = yawDegrees * Math.PI / 180, cy = Math.Cos(yaw), sy = Math.Sin(yaw);
             // row vector times rot = [[c, 0, -s], [0, 1, 0], [s, 0, c]]; rot's transpose takes it back (to the game's frame)
             Func<double, double, double, double[]> turn = (x, y, z) => new[] { x * cy + z * sy, y, -x * sy + z * cy };
             Func<double[], double[]> back = v => new[] { v[0] * cy - v[2] * sy, v[1], v[0] * sy + v[2] * cy };
@@ -1094,7 +1095,7 @@ namespace ExMoreStuff
         {
             readonly string game, fighter, stem;
             readonly Func<string, byte[]> read;
-            readonly List<CostumePose.Part> parts;
+            List<CostumePose.Part> parts;
             readonly List<Texture> normals;
             readonly Dictionary<string, int> layers;
 
@@ -1104,17 +1105,31 @@ namespace ExMoreStuff
                 fighter = stem.Substring(0, 3).ToUpperInvariant();
                 byte[] emo = read(stem + ".obj.emo");
                 if (emo == null) throw new FileNotFoundException(stem + ".obj.emo is missing");
-                string ema = CostumePose.GameFile(game, fighter, fighter + ".obj.ema");
-                try { parts = ema != null ? CostumePose.Posed(emo, File.ReadAllBytes(ema), read(stem + ".bsr"), fighter) : CostumePose.ReadEmo(emo, fighter); }
-                catch (Exception) { parts = CostumePose.ReadEmo(emo, fighter); }   // ponytail: the stance failed; the model as it's made
+                Pose(0, 0, true);
                 byte[] nml = read(stem + ".nml.emb");
                 normals = nml != null ? GameArt.ReadContainer(nml).Select(e => Decode(e.Value)).ToList() : new List<Texture>();
                 layers = NormalLayers(emo);
             }
 
-            /// <summary>Color 1-12 as the training stage lights it, `width` x `height`, transparent around the fighter;
-            /// null when the color has no textures. 11 and 12 are color 1 in the game's two styles.</summary>
-            public Bitmap Draw(int color, int width = 600, int height = 800)
+            /// <summary>The fighter's animations (CostumePose.Animations), none without its .obj.ema.</summary>
+            public List<KeyValuePair<string, int>> Animations()
+            {
+                string ema = CostumePose.GameFile(game, fighter, fighter + ".obj.ema");
+                return ema != null ? CostumePose.Animations(File.ReadAllBytes(ema)) : new List<KeyValuePair<string, int>>();
+            }
+
+            /// <summary>Poses the costume again: frame `frame` of animation `animation` (0, 0, mirrored: character select's).</summary>
+            public void Pose(int animation, double frame, bool mirror)
+            {
+                byte[] emo = read(stem + ".obj.emo");
+                string ema = CostumePose.GameFile(game, fighter, fighter + ".obj.ema");
+                try { parts = ema != null ? CostumePose.Posed(emo, File.ReadAllBytes(ema), read(stem + ".bsr"), fighter, animation, frame, mirror) : CostumePose.ReadEmo(emo, fighter); }
+                catch (Exception) { parts = CostumePose.ReadEmo(emo, fighter); }   // ponytail: the stance failed; the model as it's made
+            }
+
+            /// <summary>Color 1-12 as the training stage lights it, `width` x `height`, transparent around the fighter, turned
+            /// `yaw` degrees; null when the color has no textures. 11 and 12 are color 1 in the game's two styles.</summary>
+            public Bitmap Draw(int color, int width = 600, int height = 800, double yaw = YawDegrees)
             {
                 int style = color == 11 || color == 12 ? color : 0;
                 string cc = stem + "_" + (style != 0 ? 1 : color).ToString("D2");
@@ -1122,7 +1137,7 @@ namespace ExMoreStuff
                 if (col == null) return null;
                 var textures = GameArt.ReadContainer(col).Select(e => Decode(e.Value)).ToList();
                 byte[] emm = read(cc + ".obj.emm") ?? read(stem + ".obj.emm") ?? GameBytes(stem + ".obj.emm") ?? GameBytes(stem + "_01.obj.emm");
-                return ToBitmap(Picture(game, fighter, parts, textures, ReadEmm(emm), normals, layers, width, height, style), width, height);
+                return ToBitmap(Picture(game, fighter, parts, textures, ReadEmm(emm), normals, layers, width, height, style, yaw), width, height);
             }
 
             byte[] GameBytes(string name)

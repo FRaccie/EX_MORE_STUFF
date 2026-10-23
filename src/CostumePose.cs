@@ -1028,20 +1028,34 @@ namespace ExMoreStuff
 
         static readonly double[] IdentityMatrix = Identity();
 
+        /// <summary>The animations of a fighter's .obj.ema: name and frame count each, in order.</summary>
+        public static List<KeyValuePair<string, int>> Animations(byte[] emaData)
+        {
+            var list = new List<KeyValuePair<string, int>>();
+            foreach (int o in new Ema(emaData).AnimationOffsets)
+            {
+                int at = o + I32(emaData, o + 12) + 10;   // the name: a length byte, then its text
+                string name = at < emaData.Length ? Encoding.GetEncoding(28591).GetString(emaData, at + 1, Math.Min(emaData[at], emaData.Length - at - 1)) : "";
+                list.Add(new KeyValuePair<string, int>(name, U16(emaData, o)));
+            }
+            return list;
+        }
+
         /// <summary>The model's parts in frame `frame` of animation `animation` of the fighter's .obj.ema (0: the fighting
-        /// stance), mirrored as P2, cloth settled (`bsr`, may be null); stray accessories left out of the triangles.</summary>
-        public static List<Part> Posed(byte[] emoData, byte[] emaData, byte[] bsr, string fighter, int animation = 0, double frame = 0)
+        /// stance), mirrored (`mirror`: 1P, as character select; else 2P), cloth settled (`bsr`, may be null); stray
+        /// accessories left out of the triangles.</summary>
+        public static List<Part> Posed(byte[] emoData, byte[] emaData, byte[] bsr, string fighter, int animation = 0, double frame = 0, bool mirror = true)
         {
             var emo = new EmoSkeleton(emoData);
             var byPosition = MirrorByPosition(emo.Bind);
-            Func<string, ICollection<string>, string> mirror = (n, names) => MirrorName(n, names, byPosition);
+            Func<string, ICollection<string>, string> mirrorName = (n, names) => MirrorName(n, names, byPosition);
             var ema = new Ema(emaData);
-            var driven = ema.CostumeSkin(emo, animation, frame, true, mirror);
+            var driven = ema.CostumeSkin(emo, animation, frame, mirror, mirrorName);
             // A bone off the centre line with no counterpart (Blanka's single ankle chain) would be mirrored onto the other
             // side and moved by that side's limb; without its own matrix it takes its parent's and stays on its limb.
             var animated = ema.Driven(animation);
             foreach (string n in driven.Keys.ToList())
-                if (!animated.Contains(n) && emo.Bind.ContainsKey(n) && Math.Abs(emo.Bind[n][12]) > 0.02 && mirror(n, driven.Keys) == n)
+                if (mirror && !animated.Contains(n) && emo.Bind.ContainsKey(n) && Math.Abs(emo.Bind[n][12]) > 0.02 && mirrorName(n, driven.Keys) == n)
                     driven.Remove(n);
             var bsrParts = ReadBsr(bsr);
             var matrices = SimulateBsr(WithInherited(driven, emo), emo, bsrParts);
