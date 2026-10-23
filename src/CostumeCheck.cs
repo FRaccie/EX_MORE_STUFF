@@ -603,10 +603,17 @@ namespace ExMoreStuff
             return a.Length + b.Length == 0 ? 1 : 2.0 * l[a.Length, b.Length] / (a.Length + b.Length);
         }
 
-        /// <summary>A fixed copy of the costumes in a folder or zip, next to it ("&lt;name&gt; - fixed", a folder or a zip):
-        /// locators aligned to the stand-in, materials put right, missing parts (.shd.emo, .nml.emb, .bsr) from the game's
-        /// costume 1. The original stays as it is. Returns the copy's path and what was done.</summary>
-        public static string Fix(string game, Source source, List<string> done)
+        /// <summary>One costume's files (CHR_NN...) of a folder or zip that holds more (the game's chara folder).</summary>
+        public static Source Only(Source source, string stem)
+        {
+            return new Source { Where = source.Where, Read = source.Read, Names = source.Names.Where(n => n.StartsWith(stem, StringComparison.OrdinalIgnoreCase)).ToList() };
+        }
+
+        /// <summary>A fixed copy of the costumes in a folder or zip, next to it ("&lt;name&gt; - fixed", a folder or a zip) or
+        /// at `target` (a zip when it ends .zip): locators aligned to the stand-in, materials put right, missing parts
+        /// (.shd.emo, .nml.emb, .bsr) from the game's costume 1. The original stays as it is. Returns the copy's path and
+        /// what was done.</summary>
+        public static string Fix(string game, Source source, List<string> done, string target = null)
         {
             var files = source.Names.ToDictionary(n => n, n => source.Read(n), StringComparer.OrdinalIgnoreCase);
             foreach (string model in source.Names.Where(n => Model.IsMatch(n)).ToList())
@@ -637,8 +644,8 @@ namespace ExMoreStuff
                 }
             }
             string where = source.Where.TrimEnd('\\', '/');
-            bool zip = where.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
-            string target = zip ? where.Substring(0, where.Length - 4) + " - fixed.zip" : where + " - fixed";
+            target = target ?? (where.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? where.Substring(0, where.Length - 4) + " - fixed.zip" : where + " - fixed");
+            bool zip = target.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
             if (zip)
             {
                 if (File.Exists(target)) File.Delete(target);

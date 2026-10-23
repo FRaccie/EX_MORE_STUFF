@@ -85,16 +85,23 @@ namespace ExMoreStuff
 
         static string DockedZip(Installed record) { return record.Source == Docked.Source ? record.Package : null; }
 
+        // the page's width: the window's, up to MaxWidth (user 2026-10-23: not everything full width on a big window)
+        const int MaxWidth = 1120;
+        int ContentWidth() { return Math.Max(400, Math.Min(MaxWidth, list.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 16)); }
+
         void Fill(bool keepPlace = false)
         {
             Point place = list.AutoScrollPosition;
             stale = false;
             filledWidth = list.ClientSize.Width;
-            int width = Math.Max(400, list.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 16);
+            int width = ContentWidth();
             var controls = new List<Control>
             {
                 new Heading("Costume creation", width),
-                ShadowLabel.Note("Tools for making costumes.\n\nColor pictures: EX More Stuff opens the game once per color, a few seconds each, and takes a picture of " +
+                new Heading("Costume check", width),
+                CheckBar(width),
+                new Heading("Color pictures", width),
+                ShadowLabel.Note("EX More Stuff opens the game once per color, a few seconds each, and takes a picture of " +
                                  "your costume or color pack standing idle, as the game draws it (no stage, no life bars). They go into the costume's package for rollback games' " +   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                                  "character select, ready to share. Steam needs to be running and the game closed.", width),
             };
@@ -115,7 +122,7 @@ namespace ExMoreStuff
         // the costumes the search finds, under the search box (the top stays, so typing goes on)
         void ShowRows()
         {
-            int width = Math.Max(400, list.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 16);
+            int width = ContentWidth();
             string[] words = search.Text.Trim().ToLowerInvariant().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             var all = Costumes();
             var costumes = all.Where(g => words.All(w => g.Any(r => (Weight.Name(r) + " " + Fighters.Name(r.Item.Fighter) + " " + Path.GetFileName(r.Package)).ToLowerInvariant().Contains(w)))).ToList();
@@ -144,6 +151,7 @@ namespace ExMoreStuff
                 Installed r = record;
                 row.Make.Click += async (s, e) => await Make(r, row.Colors);
                 row.FullSizeAsked += async color => await MakeFullSize(r, color);
+                row.Check.Click += async (s, e) => await RunCheck(() => CostumeCheck.Find(r.Package), Weight.Name(r));
                 row.ForceAsked += async color => await ForceDebug(r, color);
                 row.Busy = working;
                 rows.Add(row);
@@ -347,6 +355,114 @@ namespace ExMoreStuff
             Fill(true);
         }
 
+        // ---- the costume check ----
+
+        readonly FlatButton checkInstalled = new FlatButton("Check installed costumes", true), checkFile = new FlatButton("Check a file or folder..."), showResults = new FlatButton("Show results");
+        readonly Label lastCheck = new Label { AutoSize = false, BackColor = Color.Transparent, ForeColor = Theme.Muted, Font = Theme.Font(9.5f), TextAlign = ContentAlignment.MiddleRight };
+        CheckCard checkBar;
+        List<CostumeCheck.Result> lastResults;
+        Dictionary<CostumeCheck.Result, CostumeCheck.Source> lastSources;
+        string lastTitle;
+        bool checking;
+
+        Control CheckBar(int width)
+        {
+            if (checkBar == null)
+            {
+                checkBar = new CheckCard { Margin = new Padding(8, 2, 8, 8) };
+                checkBar.Controls.AddRange(new Control[] { checkInstalled, checkFile, lastCheck, showResults });
+                showResults.Visible = false;
+                // the game's costumes as it loads them (patch_ae2_tu3\battle\chara\<CHR>) and the docked ones (out of the game)
+                checkInstalled.Click += async (s, e) => await RunCheck(() =>
+                {
+                    var found = new List<CostumeCheck.Source>();
+                    string chara = Path.Combine(Game.PatchFolder(game), "battle", "chara");
+                    if (Directory.Exists(chara)) found.AddRange(CostumeCheck.Find(chara));
+                    foreach (string zip in Docked.Load().Where(r => r.Item.IsCostume).Select(r => r.Package).Distinct(StringComparer.OrdinalIgnoreCase))
+                        if (File.Exists(zip)) found.AddRange(CostumeCheck.Find(zip));
+                    return found;
+                }, "installed costumes");
+                checkFile.Click += async (s, e) =>
+                {
+                    string path;
+                    using (var dialog = new OpenFileDialog { Filter = "A costume's zip, or any file in its folder|*.zip;*.emo;*.emm;*.emb|All files|*.*", Title = "Check a costume" })
+                    {
+                        if (dialog.ShowDialog(FindForm()) != DialogResult.OK) return;
+                        path = dialog.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? dialog.FileName : Path.GetDirectoryName(dialog.FileName);
+                    }
+                    await RunCheck(() => CostumeCheck.Find(path), Path.GetFileName(path));
+                };
+                showResults.Click += (s, e) => ShowCheck();
+            }
+            int textHeight = TextRenderer.MeasureText(CheckCard.About, Theme.Font(10.5f), new Size(width - 16 - 32, 0), TextFormatFlags.WordBreak).Height;
+            int y = 14 + textHeight + 12;
+            checkBar.Size = new Size(width - 16, y + 36 + 16);
+            checkInstalled.Location = new Point(16, y);
+            checkFile.Location = new Point(checkInstalled.Right + 10, y);
+            showResults.Location = new Point(checkBar.Width - showResults.Width - 16, y);
+            lastCheck.Bounds = new Rectangle(checkFile.Right + 10, y, Math.Max(0, (showResults.Visible ? showResults.Left : checkBar.Width - 6) - checkFile.Right - 20), 36);
+            return checkBar;
+        }
+
+        // what the check does and its buttons on a card, as a costume's row
+        class CheckCard : Clear
+        {
+            public const string About = "Finds what breaks a costume: online desyncs (bones the fight uses sitting differently from the costume a player without it sees), " +
+                                        "parts that draw white, missing files. Only the files are read, so the game can stay open. A fix always goes into a copy.";
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                Smooth(e.Graphics);
+                using (var card = Theme.Rounded(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 8))
+                {
+                    using (var fill = new SolidBrush(Color.FromArgb(215, Theme.Card))) e.Graphics.FillPath(fill, card);
+                    using (var pen = new Pen(Theme.Line)) e.Graphics.DrawPath(pen, card);
+                }
+                TextRenderer.DrawText(e.Graphics, About, Theme.Font(10.5f), new Rectangle(16, 14, Width - 32, Height), Theme.Muted, TextFormatFlags.WordBreak | TextFormatFlags.Left | TextFormatFlags.Top);
+                base.OnPaint(e);
+            }
+        }
+
+        // the check off the window's thread, then its window
+        async Task RunCheck(Func<List<CostumeCheck.Source>> find, string title)
+        {
+            if (checking || !Game.IsGameFolder(game)) return;
+            checking = true;
+            checkInstalled.Enabled = checkFile.Enabled = false;
+            Say("Checking " + title + "...");
+            string g = game, problem = null;
+            var results = new List<CostumeCheck.Result>();
+            var sources = new Dictionary<CostumeCheck.Result, CostumeCheck.Source>();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                await Task.Run(() =>
+                {
+                    foreach (var source in find())
+                        foreach (var r in CostumeCheck.Check(g, source)) { results.Add(r); sources[r] = source; }
+                });
+            }
+            catch (Exception ex) { problem = ex.Message; }
+            checking = false;
+            checkInstalled.Enabled = checkFile.Enabled = true;
+            if (problem != null) { Say("The check stopped: " + problem, true); return; }
+            if (results.Count == 0) { Say("No costume (CHR_NN.obj.emo) found in " + title + ".", true); return; }
+            lastResults = results; lastSources = sources; lastTitle = title;
+            int faulty = results.Count(r => r.Verdict == CostumeCheck.Verdict.Faulty);
+            lastCheck.Text = "Last check: " + results.Count + (results.Count == 1 ? " costume" : " costumes") + (faulty > 0 ? ", " + faulty + " need a fix" : ", nothing to fix");
+            lastCheck.ForeColor = faulty > 0 ? Theme.Warning : Theme.Muted;
+            showResults.Visible = true;
+            CheckBar(checkBar.Width + 16);   // the result's text makes room for Show results
+            Say(title + " checked in " + (watch.ElapsedMilliseconds / 1000.0).ToString("0.0") + " s");
+            ShowCheck();
+        }
+
+        void ShowCheck()
+        {
+            if (lastResults == null) return;
+            using (var window = new CostumeCheckWindow(game, "Costume check: " + lastTitle, lastResults, lastSources)) window.ShowDialog(FindForm());
+        }
+
         void SetWorking(bool on)
         {
             working = on;
@@ -364,6 +480,7 @@ namespace ExMoreStuff
     {
         public readonly FlatButton Make = new FlatButton("Make color pictures", true);
         readonly FlatButton all = new FlatButton("All");
+        public readonly FlatButton Check = new FlatButton("Check");   // the costume check on its zip (CostumeCheckWindow); not for a pack's row
         public event Action<int> FullSizeAsked;   // a color's right-click menu: that color at the game's own size
         public event Action<int> ForceAsked;      // ... or that color made a debug color (user 2026-10-16: "right click > force debug color")
         readonly string title, detail;
@@ -386,10 +503,14 @@ namespace ExMoreStuff
             all.Size = new Size(Make.Width, 32);
             all.Location = new Point(Make.Left, Make.Bottom + 8);
             all.Click += (s, e) => { bool on = !picked.All(p => p); for (int i = 0; i < picked.Length; i++) picked[i] = on; Picked(); };
+            Check.Size = all.Size;
+            Check.Location = new Point(Make.Left, all.Bottom + 8);
+            Check.Visible = canForce;
             int bottom = pictures.Length == 0 ? 64 : Cell(pictures.Length - 1).Bottom;
-            Size = new Size(width - 16, Math.Max(bottom + 14, all.Bottom + 14));
+            Size = new Size(width - 16, Math.Max(bottom + 14, (canForce ? Check : all).Bottom + 14));
             Controls.Add(Make);
             Controls.Add(all);
+            Controls.Add(Check);
         }
 
         /// <summary>The colors picked (their numbers).</summary>

@@ -1045,7 +1045,7 @@ namespace ExMoreStuff
             var creation = new ToolCard
             {
                 Symbol = "✎", Title = "Costume creation",
-                Detail = "Tools for making costumes: pictures of each color from the game itself, for rollback games' character select.",   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
+                Detail = "Costume check: what makes a costume desync online or draw white, fixed into a copy. And pictures of each color for rollback games' character select.",   // ROLLBACK-NAME: 'rollback games' stands for EMBER, never named to players (user 2026-10-14)
                 Margin = new Padding(6),
             };
             creation.Click += (s, e) => { openTool = "creation"; creationPage.SetGame(game); ShowTab(advancedTab); };

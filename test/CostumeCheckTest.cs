@@ -2,7 +2,7 @@
 // neck moved it desyncs, a material taken out of a color draws white, a part left out is missing; the fixer's copy is
 // OK again, and the original stays as it was.
 // Build: csc -target:exe -main:ExMoreStuff.CostumeCheckTest (the references of build.bat) test\CostumeCheckTest.cs src\*.cs
-// Usage: CostumeCheckTest <game> <empty work folder>
+// Usage: CostumeCheckTest <game> <empty work folder> [<results window picture.png>]
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -16,6 +16,7 @@ namespace ExMoreStuff
 
         static void Check(bool ok, string what) { Console.WriteLine((ok ? "ok    " : "FAIL  ") + what); if (!ok) failed++; }
 
+        [STAThread]
         static void Main(string[] args)
         {
             string game = args[0], work = Path.Combine(args[1], "AGL_90");
@@ -65,6 +66,38 @@ namespace ExMoreStuff
             Check(fixedResult.Verdict == CostumeCheck.Verdict.Ok || fixedResult.Verdict == CostumeCheck.Verdict.Mirror, "the fixed copy is OK (" + fixedResult.Verdict + ")");
             Check(File.ReadAllBytes(model).SequenceEqual(before), "the original stays as it was");
             Check(done.Any(d => d.Contains("AGL_90_03: eyes -> eye")) && !done.Any(d => d.Contains("in the model")), "color 3 gets its eye back, the model keeps its names");
+
+            // a folder of several costumes (as the game's chara folder): one of them fixed into a zip of its own, as the
+            // results window does
+            foreach (string f in Directory.GetFiles(copy)) File.Copy(f, Path.Combine(work, Path.GetFileName(f).Replace("AGL_90", "AGL_91")), true);
+            var both = CostumeCheck.Check(game, CostumeCheck.FromFolder(work));
+            Check(both.Count == 2 && both.Single(x => x.Name == "AGL_91").Verdict != CostumeCheck.Verdict.Faulty, "a folder of two: AGL_91 (the fixed files) isn't faulty");
+            string zip = Path.Combine(args[1], "AGL_90 - fixed.zip");
+            var zipDone = new List<string>();
+            CostumeCheck.Fix(game, CostumeCheck.Only(CostumeCheck.FromFolder(work), "AGL_90"), zipDone, zip);
+            var inZip = CostumeCheck.FromZip(zip);
+            Check(inZip.Names.All(n => n.StartsWith("AGL_90")) && inZip.Names.Count > 20, "the zip holds AGL_90's files only (" + inZip.Names.Count + ")");
+            var zipResult = CostumeCheck.Check(game, inZip).Single();
+            Check(zipResult.Verdict != CostumeCheck.Verdict.Faulty, "the zipped copy isn't faulty (" + zipResult.Verdict + ")");
+
+            // the results window, off screen, as a picture (args[2])
+            if (args.Length > 2)
+            {
+                var source = CostumeCheck.FromFolder(work);
+                var window = new CostumeCheckWindow(game, "Costume check: test", both, both.ToDictionary(x => x, x => source))
+                { StartPosition = System.Windows.Forms.FormStartPosition.Manual, Location = new System.Drawing.Point(-4000, -4000) };
+                window.Shown += (o, e) =>
+                {
+                    using (var shot = new System.Drawing.Bitmap(window.Width, window.Height))
+                    {
+                        window.DrawToBitmap(shot, new System.Drawing.Rectangle(0, 0, window.Width, window.Height));
+                        shot.Save(args[2]);
+                    }
+                    window.Close();
+                };
+                System.Windows.Forms.Application.Run(window);
+                Check(File.Exists(args[2]), "the results window drew");
+            }
             Console.WriteLine(failed == 0 ? "all passed" : failed + " failed");
             Environment.Exit(failed == 0 ? 0 : 1);
         }
