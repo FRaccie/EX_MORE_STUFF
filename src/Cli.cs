@@ -196,8 +196,6 @@ namespace ExMoreStuff
         {
             Installed r = DockedRecord(zip);
             if (!r.Item.IsCostume) throw new InvalidOperationException("only a costume's color pictures can be made here");
-            string blocked = PerfTest.Blocked();
-            if (blocked != null) throw new InvalidOperationException(blocked);
             string left = PerfTest.Recover(game);   // a test or picture run that stopped halfway: what it changed goes back first
             if (left != null) throw new InvalidOperationException(left);
             var colors = Colors(which);
@@ -208,7 +206,7 @@ namespace ExMoreStuff
             answer.Add("pictures=" + string.Join(",", made.Keys));
         }
 
-        // "1,2,5-10" (none: all ten)
+        // "1,2,5-10" (none: all twelve)
         static List<int> Colors(string which)
         {
             if (string.IsNullOrWhiteSpace(which)) return Enumerable.Range(1, PerfTest.ColorCount).ToList();

@@ -11,7 +11,7 @@ namespace ExMoreStuff
 {
     // Advanced > Costume creation (user 2026-10-12: "a new little sub menu for costume creation"): tools for people
     // making costumes. The first: color pictures. A costume of the player's own (a package with its zip) in each of its
-    // 10 colors, drawn by EX More Stuff in the stance (CostumeRender; the game's picture when it can't), no stage or life
+    // 12 colors, drawn by EX More Stuff in the stance (CostumeRender; the game's picture when it can't), no stage or life
     // bars (PerfTest.ColorPictures), put into its package
     // as <prefix>_<CC>.png for EMBER's character select, ready to share (Tom: "a render of the character with the costume
     // for each color in chara select"). Each row shows the pictures its package has. Color packs too (user 2026-10-18:
@@ -164,7 +164,7 @@ namespace ExMoreStuff
             list.ResumeLayout();
         }
 
-        // the color pictures a package has (<prefix>_01.png ... _10.png in its zip), null where there's none
+        // the color pictures a package has (<prefix>_01.png ... _12.png in its zip), null where there's none
         static Image[] Pictures(Installed record)
         {
             var found = new Image[PerfTest.ColorCount];
@@ -212,7 +212,7 @@ namespace ExMoreStuff
         async Task Make(Installed record, List<int> colors)
         {
             if (colors.Count == 0) return;
-            string blocked = (Blocked != null ? Blocked() : null) ?? PerfTest.Blocked();
+            string blocked = Blocked != null ? Blocked() : null;   // the game only matters when a costume can't be drawn (PerfTest checks then)
             if (blocked != null) { Say("Can't make them now: " + blocked, true); return; }
             string name = Weight.Name(record), g = game, problem = null;
             string which = colors.Count == PerfTest.ColorCount ? "each color" : colors.Count == 1 ? "color " + colors[0] : "colors " + string.Join(", ", colors);
@@ -248,7 +248,7 @@ namespace ExMoreStuff
         {
             var picked = packs.Where(p => colors.Contains(p.Item.Color)).ToList();
             if (picked.Count == 0) return;
-            string blocked = (Blocked != null ? Blocked() : null) ?? PerfTest.Blocked();
+            string blocked = Blocked != null ? Blocked() : null;   // the game only matters when a costume can't be drawn (PerfTest checks then)
             if (blocked != null) { Say("Can't make them now: " + blocked, true); return; }
             string name = PackName(packs[0]), g = game, problem = null;
             string which = picked.Count == 1 ? "color " + picked[0].Item.Color : "colors " + string.Join(", ", picked.Select(p => p.Item.Color));
@@ -281,7 +281,7 @@ namespace ExMoreStuff
         // one of a pack's colors at the game's own size, beside its zip as MakeFullSize does
         async Task MakePackFullSize(Installed pack)
         {
-            string blocked = (Blocked != null ? Blocked() : null) ?? PerfTest.Blocked();
+            string blocked = Blocked != null ? Blocked() : null;   // the game only matters when a costume can't be drawn (PerfTest checks then)
             if (blocked != null) { Say("Can't make it now: " + blocked, true); return; }
             string name = PackName(pack), g = game, problem = null;
             int color = pack.Item.Color;
@@ -303,7 +303,7 @@ namespace ExMoreStuff
         // "<zip name> - color N.png" (made again: replaced); the package isn't touched. Then Explorer shows it.
         async Task MakeFullSize(Installed record, int color)
         {
-            string blocked = (Blocked != null ? Blocked() : null) ?? PerfTest.Blocked();
+            string blocked = Blocked != null ? Blocked() : null;   // the game only matters when a costume can't be drawn (PerfTest checks then)
             if (blocked != null) { Say("Can't make it now: " + blocked, true); return; }
             string name = Weight.Name(record), g = game, problem = null;
             string file = Path.Combine(Path.GetDirectoryName(record.Package), Path.GetFileNameWithoutExtension(record.Package) + " - color " + color + ".png");
@@ -484,7 +484,7 @@ namespace ExMoreStuff
         public event Action<int> ForceAsked;      // ... or that color made a debug color (user 2026-10-16: "right click > force debug color")
         readonly string title, detail;
         readonly Image[] pictures;
-        readonly int[] numbers;   // each picture's color: 1-10, or a color pack's 30-99
+        readonly int[] numbers;   // each picture's color: 1-12, or a color pack's 30-99
         readonly bool[] picked;
         readonly bool canForce;   // Force debug color in its menu (a costume's; not a pack's)
         bool busy;

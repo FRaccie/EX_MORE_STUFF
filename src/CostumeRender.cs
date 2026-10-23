@@ -18,7 +18,11 @@ namespace ExMoreStuff
     //   with self-shadow (a shadow map from the key light), hemisphere ambient, a second light, specular, normal maps;
     // - the special materials (emission, environment maps, velvet, oil, ...) at rest;
     // - the stage's glare (bloom) and colour filter over the picture.
-    // Colors 11 and 12 (the stylized ones) are not drawn here.
+    // Colors 11 and 12 have no files of their own: the game draws color 1's (loader 0x5e5cf0) in a style (notes in
+    // ~/SF4-rea/notes/stylized-colours.md):
+    // - 11, dark rim: the same shaders with Brush_PS c98 and RimLight_PS c60 set per fighter (setupEdgeFilterParams 0x564cb0);
+    // - 12, ink hatching: each material's technique swapped to Hatching_W and friends (0x53b5e0), tam.emz's tonal art
+    //   map in screen space (Hatching_PS).
     static class CostumeRender
     {
         const double FieldOfView = 24.0, YawDegrees = 90.0;
@@ -54,6 +58,41 @@ namespace ExMoreStuff
             double f = (1.0 - MainDir[2]) * 0.5;   // the battle camera looks along +z
             Rim = new[] { 0.473 * f, 0.321 * f, 0.098 * f, f };
         }
+
+        // color 11's c98 (0x564cb0) and c60
+        static double[] Brush11(string fighter)
+        {
+            if (fighter == "DCP") return new[] { 8.0, 4, 10, 4 };
+            if (fighter == "HUG") return new[] { 8.0, 4, 5, 3 };
+            return new[] { 8.0, 4, 6, 3 };
+        }
+
+        static readonly double[] Rim11 = { 0.0, 0.0, 0.2, 1.0 };
+
+        // color 12's technique per material (0x53b5e0): 0 the material's own, else Hatching, Hatching with alpha 1, HatchingOil
+        const int Hatching = 12, HatchingAlpha1 = 13, HatchingOil = 14;
+
+        static int HatchingTechnique(string fighter, string shader)
+        {
+            if (shader.Contains("Emission") || shader.Contains("QLOC_GLARE") || shader.Contains("Eye")) return 0;
+            if (shader.Contains("NoAlpha")) return HatchingAlpha1;   // Hatching_Mask
+            if (fighter == "BOS") return shader.Contains("Nega") || shader.Contains("Env") ? HatchingAlpha1 : Hatching;
+            if (fighter == "RYX" || fighter == "GKX")
+            {
+                if (shader.Contains("BrushEmiMaskConst")) return 0;
+                return shader.Contains("BrushEmi") ? HatchingAlpha1 : Hatching;
+            }
+            if (fighter == "HKN")
+            {
+                if (shader.Contains("Scroll")) return 0;
+                return shader.Contains("Oil") ? HatchingOil : Hatching;
+            }
+            return Hatching;   // MKT _Col_ and ROS Halo: as Hatching at rest
+        }
+
+        // The hatching strokes are tiled in the game's screen: a 40 degree field of view on 16:9 at the round-start distance
+        const double GameDistance = 4.25;
+        static readonly double GameTanY = Math.Tan(20.0 * Math.PI / 180);
 
         // ---------- textures ----------
 
@@ -167,6 +206,7 @@ namespace ExMoreStuff
         class Stage
         {
             public Texture[] Cube;
+            public Texture Tam;   // tam.emz, color 12's strokes
             public Dictionary<string, HashSet<string>> Techniques = new Dictionary<string, HashSet<string>>();   // technique -> /MtxP set
         }
 
@@ -189,6 +229,13 @@ namespace ExMoreStuff
                         var cube = GameArt.ReadContainer(inner[1].Value);
                         if (cube.Count > 0) stage.Cube = Cube(cube[0].Value);
                     }
+                }
+                // HatchingTexture binds it linear, no mips
+                string tam = Path.Combine(game, "resource", "battle", "chara_ex", "hatching", "tam.emz");
+                if (File.Exists(tam))
+                {
+                    var inner = GameArt.ReadContainer(GameArt.Unpack(File.ReadAllBytes(tam)));
+                    if (inner.Count > 0) stage.Tam = Decode(inner[0].Value, false);
                 }
                 // which techniques sample the self-shadow map (/MtxP WLP_SM in setting_technique.emz)
                 string techniques = Path.Combine(game, "dlc", "04_ae2", "shader", "setting_technique.emz");
@@ -337,7 +384,8 @@ namespace ExMoreStuff
             public Look Look;
             public double Cut;
             public bool Blend, Cull, Sss, Shadowed, GlareOn;
-            public double[] GlareScale, MatDif, MatAmb, MatSpc, MatSss, MatSpec;
+            public int Hatch;   // color 12: Hatching, HatchingAlpha1, HatchingOil, or 0
+            public double[] Brush, RimColor, GlareScale, MatDif, MatAmb, MatSpc, MatSss, MatSpec;
         }
 
         // per-vertex data in the picture's frame
@@ -345,6 +393,7 @@ namespace ExMoreStuff
         {
             public double[][] Pos, Nrm, Clip;   // per part: 3, 3, 4 per vertex
             public double[][] Ripple;
+            public double[][] Game;   // color 12: per part, game screen x, y and w per vertex
         }
 
         static double[] MulPoint(double[] m, double x, double y, double z)   // column-vector 4x4 times (x, y, z, 1)
@@ -394,7 +443,7 @@ namespace ExMoreStuff
         /// <summary>The posed costume in one color as the training stage lights it: an RGBA picture `width` x `height`,
         /// the fighter framed in it, transparent around them.</summary>
         static float[] Picture(string game, string fighter, List<CostumePose.Part> parts, List<Texture> textures, Dictionary<string, Material> materials,
-                               List<Texture> normals, Dictionary<string, int> layers, int width, int height)
+                               List<Texture> normals, Dictionary<string, int> layers, int width, int height, int style)
         {
             Stage stage = StageOf(game);
             double yaw = YawDegrees * Math.PI / 180, cy = Math.Cos(yaw), sy = Math.Sin(yaw);
@@ -431,7 +480,19 @@ namespace ExMoreStuff
             double half = Math.Max((hi[1] - lo[1]) / 2, (hi[0] - lo[0]) / 2 / aspect) * 1.06;
             double distance = half / Math.Tan(FieldOfView * Math.PI / 360) + (hi[2] - lo[2]) / 2;
             double[] eye = { center[0], center[1] + (hi[1] - lo[1]) * 0.12, center[2] - distance };
-            double[] mvp = MatMul(Perspective(FieldOfView, aspect, distance * 0.3, distance * 3), LookAt(eye, center));
+            double[] viewMatrix = LookAt(eye, center);
+            double[] mvp = MatMul(Perspective(FieldOfView, aspect, distance * 0.3, distance * 3), viewMatrix);
+            if (style == 12)
+            {
+                double[] vc = MulPoint(viewMatrix, center[0], center[1], center[2]);
+                double gx = 1 / (GameDistance * GameTanY * 16 / 9), gy = 1 / (GameDistance * GameTanY);
+                frame.Game = frame.Pos.Select(pos => Enumerable.Range(0, pos.Length / 3).SelectMany(v =>
+                {
+                    double[] r = MulPoint(viewMatrix, pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]);
+                    double rx = r[0] - vc[0], ry = r[1] - vc[1], gw = GameDistance - (r[2] - vc[2]);   // view space looks down -z
+                    return new[] { rx * gx * GameDistance / gw, ry * gy * GameDistance / gw, gw };
+                }).ToArray()).ToArray();
+            }
             double[] l0 = turn(-MainDir[0], -MainDir[1], -MainDir[2]), l1 = turn(-SubDir[0], -SubDir[1], -SubDir[2]);
             // the self-shadow: an orthographic shadow map from the key light over the fighter
             double radius = Math.Sqrt(Dot(Sub(hi, lo), Sub(hi, lo))) / 2;
@@ -464,11 +525,13 @@ namespace ExMoreStuff
                     if (sub.Triangles.Length == 0 || sub.Texture >= textures.Count || textures[sub.Texture] == null) continue;
                     Material m;
                     if (!materials.TryGetValue(sub.Material, out m)) m = new Material();
-                    int layer;
+                    int layer, hatch = style == 12 ? HatchingTechnique(fighter, m.Shader) : 0;
+                    bool dark = style == 11 && !m.Shader.Contains("Eye");
                     int nml = layers.TryGetValue(sub.Material, out layer) ? layer - textures.Count : -1;
                     var draw = new Draw
                     {
-                        Part = parts[i], Triangles = sub.Triangles, Texture = textures[sub.Texture], Material = m, Look = SpecialMaterial(fighter, m.Shader, m),
+                        Part = parts[i], Triangles = sub.Triangles, Texture = textures[sub.Texture], Material = m, Look = hatch != 0 ? new Look() : SpecialMaterial(fighter, m.Shader, m),
+                        Hatch = hatch, Brush = dark ? Brush11(fighter) : m.Brush, RimColor = dark ? Rim11 : Rim,
                         Blend = m.Blend, Cut = m.Blend ? Math.Max(m.Cut, 0.02) : m.Cut,
                         // EmMaterial::applyRenderStates 0x6ce380: back faces culled unless BackFace or TwoSidedRender
                         Cull = m.Get("BackFace", 0) == 0 && m.Get("TwoSidedRender", 0) == 0,
@@ -490,7 +553,7 @@ namespace ExMoreStuff
             var glare = new float[sw * sh * 4];
             var depth = new float[sw * sh];
             for (int i = 0; i < depth.Length; i++) depth[i] = 1;
-            var ctx = new Shading { Eye = eye, L0 = l0, L1 = l1, Back = back, C95 = RestC95(fighter), Cube = stage.Cube, Shadow = shadowMap, LightMvp = lightMvp };
+            var ctx = new Shading { Eye = eye, L0 = l0, L1 = l1, Back = back, C95 = RestC95(fighter), Cube = stage.Cube, Tam = stage.Tam, Shadow = shadowMap, LightMvp = lightMvp };
             Rasterize(sw, sh, draws.Count, d => frame.Clip[partIndex[draws[d].Part]], d => draws[d].Triangles,
                       (d, x, y, z, b, tri) =>
                       {
@@ -608,6 +671,7 @@ namespace ExMoreStuff
             public double[] Eye, L0, L1, C95, LightMvp;
             public Func<double[], double[]> Back;
             public Texture[] Cube;
+            public Texture Tam;
             public ShadowMap Shadow;
             // per triangle: dp1, dp2, duv1, duv2 (screen-signed), and the uv steps per pixel along x and y at its centre
             readonly Dictionary<Draw, double[][][]> frames = new Dictionary<Draw, double[][][]>();
@@ -675,6 +739,22 @@ namespace ExMoreStuff
                 double[] n = Norm(new[] { b[0] * nrm[i0 * 3] + b[1] * nrm[i1 * 3] + b[2] * nrm[i2 * 3], b[0] * nrm[i0 * 3 + 1] + b[1] * nrm[i1 * 3 + 1] + b[2] * nrm[i2 * 3 + 1], b[0] * nrm[i0 * 3 + 2] + b[1] * nrm[i1 * 3 + 2] + b[2] * nrm[i2 * 3 + 2] });
                 double[] view = Norm(Sub(Eye, p));
                 if (Dot(n, view) < 0) n = new[] { -n[0], -n[1], -n[2] };   // two-sided cloth and hair
+                if (draw.Hatch != 0)
+                {
+                    double hv = Sat(Dot(n, view));
+                    if (draw.Hatch == HatchingOil) { double k = C95[0] * (1 - hv); c[1] += 0.7 * k; c[2] += k; }   // HatchingOil_PS
+                    double ldn = Dot(L0, n), tone = HatchTone(n, hv, f.Game[part], i0, i1, i2, b);
+                    double rim = Sat(draw.Brush[2] * (1 - hv) - draw.Brush[3] - ldn) * Sat(draw.Brush[2] - 4);
+                    for (int k = 0; k < 3; k++)
+                    {
+                        double c2 = c[k] * c[k], paper = (ldn * 0.5 + 0.5) * (2 * c[k] - 2 * c2) + c2, ink = Sat(c2 - (0.5 - 0.5 * hv));
+                        o[k] = ink + (paper - ink) * tone;
+                        o[k] += (draw.RimColor[k] - o[k]) * rim * draw.RimColor[3];
+                    }
+                    o[3] = o[7] = draw.Hatch == HatchingAlpha1 ? 1 : draw.Blend ? c[3] : 1;
+                    for (int k = 0; k < 3; k++) o[4 + k] = draw.GlareOn ? o[k] * (o[0] + o[1] + o[2] - Tone[3]) * Tone[k] : 0;
+                    return true;
+                }
                 if (draw.Normals != null)   // tex2D(s1) * 2 - 1 in the tangent frame from the derivatives
                 {
                     double[] t = Add(Scale(Cross(tf[1], n), tf[2][0]), Scale(Cross(n, tf[0]), tf[3][0]));
@@ -704,20 +784,20 @@ namespace ExMoreStuff
                     if (draw.Blend) alpha = c[3] + (1 - c[3]) * k;
                 }
                 else if (look.Special == ColorShadow) shade = new[] { look.P0[0] * look.P0[3], look.P0[1] * look.P0[3], look.P0[2] * look.P0[3] };
-                double[] brush = draw.Material.Brush;
+                double[] brush = draw.Brush, rimColor = draw.RimColor;
                 var albedo = (double[])texel.Clone();
                 if (look.RimKind == RimBrush)
                 {
-                    double bb = Sat(brush[0] * ndl - brush[1]), rim = Sat(brush[2] * (1 - ndv) - brush[3] - ndl) * Rim[3];
+                    double bb = Sat(brush[0] * ndl - brush[1]), rim = Sat(brush[2] * (1 - ndv) - brush[3] - ndl) * rimColor[3];
                     for (int k = 0; k < 3; k++)
                     {
                         double dark = shade[k] * texel[k] * texel[k];
                         albedo[k] = dark + bb * (texel[k] - dark);
-                        albedo[k] += (Rim[k] - albedo[k]) * rim;
+                        albedo[k] += (rimColor[k] - albedo[k]) * rim;
                     }
                 }
                 else if (look.RimKind == RimSquare)
-                    for (int k = 0; k < 3; k++) albedo[k] += (Rim[k] - albedo[k]) * (1 - ndv) * (1 - ndv) * Rim[3];
+                    for (int k = 0; k < 3; k++) albedo[k] += (rimColor[k] - albedo[k]) * (1 - ndv) * (1 - ndv) * rimColor[3];
                 // the key light with self-shadow, hemisphere ambient, the second light, specular
                 double lit = draw.Shadowed ? Lit(p) : 1;
                 double hy = n[1], ndl1 = Sat(Dot(n, L1));
@@ -784,6 +864,28 @@ namespace ExMoreStuff
                 foreach (double[] t in taps)
                     if (z - 0.012 * 0.5 <= Shadow.At(x + t[0] / 1024, 1 - (y + t[1] / 1024))) lit += 0.25;
                 return lit;
+            }
+
+            // Hatching_PS's tone: the four stroke directions of the tonal art map weighted by the object-space normal,
+            // banded by NdotV
+            double HatchTone(double[] n, double ndv, double[] game, int i0, int i1, int i2, double[] b)
+            {
+                double[] no = Back(n);
+                double s = 1 / Math.Sqrt(no[0] * no[0] + no[1] * no[1] + 0.001), dx = no[0] * s, dy = no[1] * s;
+                double[] wgt = { dx * 0.831469655 + dy * 0.555570126, dx * 0.555570424 + dy * 0.831469476, dx * -0.555569887 + dy * 0.831469834, dx * -0.831469297 + dy * 0.555570662 };
+                for (int k = 0; k < 4; k++) wgt[k] *= wgt[k];
+                double gx = b[0] * game[i0 * 3] + b[1] * game[i1 * 3] + b[2] * game[i2 * 3];
+                double gy = b[0] * game[i0 * 3 + 1] + b[1] * game[i1 * 3 + 1] + b[2] * game[i2 * 3 + 1];
+                double gw = b[0] * game[i0 * 3 + 2] + b[1] * game[i1 * 3 + 2] + b[2] * game[i2 * 3 + 2];
+                double scale = Sat(gw * 0.222222224 - 0.111111112) * 4 + 6;
+                var t = new double[4];
+                if (Tam != null) Tam.Bilinear(0, gx * scale, gy * scale, true, t);
+                Func<double, double> band = bias => Sat(1 - Enumerable.Range(0, 4).Sum(k => Sat(t[k] * 256 - bias) * wgt[k]));
+                double rx = band(179.2), ry = band(102.4), rz = band(0);
+                double r0 = ndv * 10 - 9, r1 = ndv * 5 - 3.5, r2 = ndv * 2.5 - 0.75, r3 = ndv * 65535 - 58981.5;
+                double t0 = rx + (1 - rx) * r0, t1 = ry + (rx - ry) * r1, t2 = rz + (ry - rz) * r2, t3 = rz;
+                double b0 = Sat(r3), b1 = Sat((ndv - 0.7 - b0) * 65535), b2 = Sat((ndv - b0 - 0.3 - b1) * 65535), b3 = Sat(1 - b0 - b1 - b2);
+                return b0 * t0 + b1 * t1 + b2 * t2 + b3 * t3;
             }
 
             // log2 of texels per pixel along the longer screen axis, shortened up to 16 times by anisotropic filtering
@@ -1010,16 +1112,17 @@ namespace ExMoreStuff
                 layers = NormalLayers(emo);
             }
 
-            /// <summary>Color 1-10 as the training stage lights it, `width` x `height`, transparent around the fighter;
-            /// null when the color has no textures.</summary>
+            /// <summary>Color 1-12 as the training stage lights it, `width` x `height`, transparent around the fighter;
+            /// null when the color has no textures. 11 and 12 are color 1 in the game's two styles.</summary>
             public Bitmap Draw(int color, int width = 600, int height = 800)
             {
-                string cc = stem + "_" + color.ToString("D2");
+                int style = color == 11 || color == 12 ? color : 0;
+                string cc = stem + "_" + (style != 0 ? 1 : color).ToString("D2");
                 byte[] col = read(cc + ".col.emb");
                 if (col == null) return null;
                 var textures = GameArt.ReadContainer(col).Select(e => Decode(e.Value)).ToList();
                 byte[] emm = read(cc + ".obj.emm") ?? read(stem + ".obj.emm") ?? GameBytes(stem + ".obj.emm") ?? GameBytes(stem + "_01.obj.emm");
-                return ToBitmap(Picture(game, fighter, parts, textures, ReadEmm(emm), normals, layers, width, height), width, height);
+                return ToBitmap(Picture(game, fighter, parts, textures, ReadEmm(emm), normals, layers, width, height, style), width, height);
             }
 
             byte[] GameBytes(string name)

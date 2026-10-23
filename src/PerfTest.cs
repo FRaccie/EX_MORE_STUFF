@@ -366,10 +366,10 @@ namespace ExMoreStuff
         // saves the layer the game draws the fighters on (no stage, no life bars: transparent around them) 60 frames
         // in. P1 is the costume's fighter wearing it (in the Original's place), P2 Ryu (Ken beside Ryu), cut away.
         const string TrainingMode = "patch=26B00:02>03\r\n";
-        public const int ColorCount = 10;
+        public const int ColorCount = 12;   // 11 and 12: color 1 in the game's two styles
         public const int PictureWidth = 256, PictureHeight = 384;   // as the pattern pictures (ColorVariants), for Ember's gallery
 
-        /// <summary>An installed custom costume in the colors asked for (1-10; all when null), drawn (Drawn) or, when it can't
+        /// <summary>An installed custom costume in the colors asked for (1-12; all when null), drawn (Drawn) or, when it can't
         /// be, P1 standing idle as the game draws it, cut out (off the window's thread: about 7 seconds of game a color). `say` says which color. A docked
         /// file (`docked`, its zip: not in the game) is unpacked beside the program for the runs and in Ryu's Original's
         /// place from there; the unpacked files go after.</summary>
