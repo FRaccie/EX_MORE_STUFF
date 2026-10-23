@@ -1,0 +1,47 @@
+# A tag like v0.98: that version built and published as a GitHub Release (EXMoreStuff-0.98.zip, from make_publish.ps1, and
+# its .sha256, which the program's updater checks the zip against). Then a pull request that names the version in
+# catalog.json: players are told about it only once that is merged.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Version from the tag
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          if ($version -notmatch '^\d+\.\d+$') { throw "tags are v<major>.<minor>, like v0.98" }
+          (Get-Content src\AssemblyInfo.cs -Raw) -replace '(Assembly(File)?Version\(")[^"]+', "`${1}$version.0.0" | Set-Content src\AssemblyInfo.cs -NoNewline
+          "VERSION=$version" >> $env:GITHUB_ENV
+      - name: Build and zip
+        shell: pwsh
+        run: .\make_publish.ps1
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $zip = "publish\EXMoreStuff-$env:VERSION.zip"
+          "{0}  EXMoreStuff-{1}.zip" -f (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower(), $env:VERSION | Set-Content "$zip.sha256" -NoNewline -Encoding ascii
+      - name: Release
+        shell: pwsh
+        run: gh release create $env:GITHUB_REF_NAME "publish\EXMoreStuff-$env:VERSION.zip" "publish\EXMoreStuff-$env:VERSION.zip.sha256" --title "EX More Stuff $env:VERSION" --generate-notes
+      - name: Catalog pull request
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "catalog-$env:VERSION" origin/main
+          (Get-Content catalog.json -Raw) -replace '("program":\s*\{\s*"version":\s*")[^"]+', "`${1}$env:VERSION" | Set-Content catalog.json -NoNewline
+          git commit -am "Catalog: EX More Stuff $env:VERSION is out"
+          git push origin "catalog-$env:VERSION"
+          gh pr create --base main --head "catalog-$env:VERSION" --title "Catalog: EX More Stuff $env:VERSION" --body "Merging this tells players about $env:VERSION and lets EX More Stuff update itself to it."

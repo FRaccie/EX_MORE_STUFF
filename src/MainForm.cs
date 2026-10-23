@@ -283,6 +283,7 @@ namespace ExMoreStuff
         {
             BuildAdvanced();
             AppFolders.ClearUpdateHint();   // left by the update link: this is the new version
+            Updater.CleanUp();
             game = Settings.GameFolder;
             if (!Game.IsGameFolder(game)) game = Game.Find();
             if (!Game.IsGameFolder(game)) { Opacity = 1; if (!ChooseGame()) { Close(); return; } }
@@ -449,9 +450,11 @@ namespace ExMoreStuff
         }
 
         // The update link: asked first. On Yes, once nothing is working (an install, Apply, a download ... finishes first,
-        // and any open question is answered), the program's folder opens with EXMoreStuff.exe picked, the new version's zip
-        // starts downloading in the browser (its release page instead, if the zip isn't up yet), and EX More Stuff closes
-        // so the new exe can take this one's place.
+        // and any open question is answered), the new version is downloaded and checked (Updater), takes this exe's place,
+        // and EX More Stuff closes and starts again. If that can't be done (no checksum next to an older release, no
+        // network, a folder it can't write in), the old way: the program's folder opens with EXMoreStuff.exe picked, the
+        // zip starts downloading in the browser (its release page instead, if the zip isn't up yet), and EX More Stuff
+        // closes so the new exe can be put in its place by hand.
         bool updating, closingToUpdate;
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -463,8 +466,7 @@ namespace ExMoreStuff
             int pending = Pending();
             string exe = Application.ExecutablePath;
             if (MessageBox.Show(this, "Update to EX More Stuff " + Catalog.ProgramVersion + "?\n\n" +
-                    "EX More Stuff closes" + (locked ? " once what it's doing now is finished" : "") + ", its folder opens with EXMoreStuff.exe selected, " +
-                    "and the new version starts downloading in your browser.\n\nOpen the zip and put its EXMoreStuff.exe in place of this one. " +
+                    "EX More Stuff downloads it, closes" + (locked ? " once what it's doing now is finished" : "") + " and starts again. " +
                     "Your mods, songs and settings stay as they are." +
                     (pending > 0 ? "\n\nYour " + pending + " change" + (pending > 1 ? "s" : "") + " waiting for Apply won't be applied." : ""),
                     Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No) return;
@@ -472,6 +474,13 @@ namespace ExMoreStuff
             if (locked) SetStatus("Updating: EX More Stuff closes when what it's doing is finished...");
             var zipUp = Catalog.Reachable(Catalog.ProgramDownload);   // checked meanwhile
             while (locked || !IsWindowEnabled(Handle)) await Task.Delay(300);
+            SetStatus("Downloading EX More Stuff " + Catalog.ProgramVersion + "...");
+            string problem = await Updater.Download(Catalog.ProgramDownload);
+            while (locked || !IsWindowEnabled(Handle)) await Task.Delay(300);   // anything started during the download finishes first
+            if (problem == null) { closingToUpdate = true; Close(); return; }
+            MessageBox.Show(this, "EX More Stuff couldn't update by itself (" + problem + ").\n\nIts folder opens with EXMoreStuff.exe selected, " +
+                    "and the new version starts downloading in your browser: open the zip and put its EXMoreStuff.exe in place of this one.",
+                    Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
             AppFolders.LeaveUpdateHint();   // "Drag EXE to update.txt" beside it, gone again when the new one starts
             try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + exe + "\""); } catch (Exception) { }
             try { System.Diagnostics.Process.Start(await zipUp ? Catalog.ProgramDownload : Catalog.ProgramPage); } catch (Exception) { }

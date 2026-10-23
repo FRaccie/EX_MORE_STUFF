@@ -1,0 +1,16 @@
+# Every push and every pull request: EXMoreStuff.exe built the same way as on our PCs (build.bat), kept as the
+# run's artifact so a change can be tried without building it.
+name: Build
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: cmd
+        run: build.bat
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EXMoreStuff
+          path: out/EXMoreStuff.exe

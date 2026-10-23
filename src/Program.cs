@@ -37,6 +37,7 @@ namespace ExMoreStuff
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new MainForm());
             }
+            Updater.Relaunch();   // after the one-window lock is gone, so the new version can open its window
         }
 
         [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);

@@ -4,7 +4,9 @@ rem Windows 10/11 already have (nothing to install, no extra libraries, no packe
 rem (res\stages, from EMBER), the background, logo and wordmark are built in; fighter portraits are read from the
 rem player's game at runtime. Optional argument: another output name (for when EXMoreStuff.exe is open).
 setlocal
-set CSC=C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\MSBuild\Current\Bin\Roslyn\csc.exe
+rem CSC from outside wins; without the 2019 Build Tools, the newest Visual Studio's compiler (GitHub's runners have 2022)
+if not defined CSC set "CSC=C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\MSBuild\Current\Bin\Roslyn\csc.exe"
+if not exist "%CSC%" for /f "usebackq delims=" %%c in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -find MSBuild\**\Bin\Roslyn\csc.exe`) do set "CSC=%%c"
 set FW=C:\Windows\Microsoft.NET\Framework64\v4.0.30319
 set OUT=%~1
 if "%OUT%"=="" set OUT=EXMoreStuff.exe
