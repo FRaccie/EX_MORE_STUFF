@@ -1,6 +1,6 @@
 # A tag like v0.98: that version built and published as a GitHub Release (EXMoreStuff-0.98.zip, from make_publish.ps1, and
-# its .sha256, which the program's updater checks the zip against). Then a pull request that names the version in
-# catalog.json: players are told about it only once that is merged.
+# its .sha256, which the program's updater checks the zip against). Then a pull request that puts the version in
+# src\AssemblyInfo.cs and catalog.json on main: players are told about it only once that is merged.
 name: Release
 on:
   push:
@@ -42,6 +42,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "catalog-$env:VERSION" origin/main
           (Get-Content catalog.json -Raw) -replace '("program":\s*\{\s*"version":\s*")[^"]+', "`${1}$env:VERSION" | Set-Content catalog.json -NoNewline
-          git commit -am "Catalog: EX More Stuff $env:VERSION is out"
+          git add catalog.json src\AssemblyInfo.cs
+          git commit -m "EX More Stuff $env:VERSION is out"
           git push origin "catalog-$env:VERSION"
-          gh pr create --base main --head "catalog-$env:VERSION" --title "Catalog: EX More Stuff $env:VERSION" --body "Merging this tells players about $env:VERSION and lets EX More Stuff update itself to it."
+          gh pr create --base main --head "catalog-$env:VERSION" --title "EX More Stuff $env:VERSION is out" --body "Merging this tells players about $env:VERSION and lets EX More Stuff update itself to it."
